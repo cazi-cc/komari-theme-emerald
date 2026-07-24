@@ -1,6 +1,16 @@
 const DARK_CLASS_NAMES = new Set(['dark', 'dark-mode', 'dark-theme', 'theme-dark'])
 const LIGHT_CLASS_NAMES = new Set(['light', 'light-mode', 'light-theme', 'theme-light'])
-const THEME_ATTRIBUTES = ['data-theme', 'data-color-scheme', 'data-mode', 'data-color-theme']
+const THEME_ATTRIBUTES = [
+  'data-theme',
+  'data-color-scheme',
+  'data-mode',
+  'data-color-theme',
+  'data-accent-color',
+  'data-gray-color',
+  'data-panel-background',
+  'data-radius',
+  'data-scaling',
+]
 const COLOR_CHANNEL_RE = /[\d.]+/g
 const OKLCH_LIGHTNESS_RE = /^oklch\(\s*([\d.]+)(%)?/i
 const copiedHostProperties = new Set<string>()
@@ -44,8 +54,48 @@ function darkRgbColor(color: string): boolean | null {
   return luminance < 0.45
 }
 
+function hostFrameElement(hostDocument: Document): Element | null {
+  try {
+    const frame = window.frameElement
+    return frame?.ownerDocument === hostDocument ? frame : null
+  }
+  catch {
+    return null
+  }
+}
+
+function frameAncestors(hostDocument: Document): Element[] {
+  const ancestors: Element[] = []
+  let element = hostFrameElement(hostDocument)?.parentElement ?? null
+  while (element) {
+    ancestors.push(element)
+    element = element.parentElement
+  }
+  return ancestors
+}
+
+function hostThemeScope(hostDocument: Document): Element | null {
+  const frame = hostFrameElement(hostDocument)
+  return frame?.closest('.radix-themes')
+    ?? hostDocument.querySelector('.radix-themes[data-is-root-theme="true"]')
+    ?? hostDocument.querySelector('.radix-themes')
+}
+
+function uniqueElements(elements: Array<Element | null | undefined>): Element[] {
+  return [...new Set(elements.filter((element): element is Element => Boolean(element)))]
+}
+
+function hostThemeElements(hostDocument: Document): Element[] {
+  return uniqueElements([
+    hostThemeScope(hostDocument),
+    ...frameAncestors(hostDocument),
+    hostDocument.documentElement,
+    hostDocument.body,
+  ])
+}
+
 function hostTheme(hostDocument: Document, fallbackDark: boolean): boolean {
-  const elements = [hostDocument.documentElement, hostDocument.body].filter(Boolean)
+  const elements = hostThemeElements(hostDocument)
   const readStyle = (element: Element) => (
     hostDocument.defaultView?.getComputedStyle(element) ?? getComputedStyle(element)
   )
@@ -84,9 +134,70 @@ function parentDocument(): Document | null {
 }
 
 function hostColorTheme(hostDocument: Document): string {
-  return hostDocument.documentElement.getAttribute('data-color-theme')
+  const scope = hostThemeScope(hostDocument)
+  return scope?.getAttribute('data-accent-color')
+    || hostDocument.documentElement.getAttribute('data-color-theme')
     || hostDocument.body?.getAttribute('data-color-theme')
     || ''
+}
+
+function visibleBackground(hostDocument: Document): string {
+  const hostWindow = hostDocument.defaultView
+  if (!hostWindow)
+    return ''
+
+  for (const element of frameAncestors(hostDocument)) {
+    const color = hostWindow.getComputedStyle(element).backgroundColor.trim()
+    if (color && color !== 'transparent' && color !== 'rgba(0, 0, 0, 0)')
+      return color
+  }
+  return ''
+}
+
+function mapHostSemanticProperties(hostDocument: Document): void {
+  const hostWindow = hostDocument.defaultView
+  const scope = hostThemeScope(hostDocument)
+  if (!hostWindow || !scope)
+    return
+
+  const style = hostWindow.getComputedStyle(scope)
+  const value = (...properties: string[]) => {
+    for (const property of properties) {
+      const result = style.getPropertyValue(property).trim()
+      if (result)
+        return result
+    }
+    return ''
+  }
+  const foreground = value('--gray-12', '--foreground')
+  const semanticValues = new Map<string, string>([
+    ['--background', visibleBackground(hostDocument) || value('--accent-1', '--color-background')],
+    ['--foreground', foreground],
+    ['--card', value('--gray-a2', '--gray-2', '--card')],
+    ['--card-foreground', foreground],
+    ['--popover', value('--gray-2', '--card')],
+    ['--popover-foreground', foreground],
+    ['--primary', value('--accent-9', '--primary')],
+    ['--primary-foreground', value('--accent-contrast', '--primary-foreground')],
+    ['--secondary', value('--gray-a3', '--gray-3', '--secondary')],
+    ['--secondary-foreground', foreground],
+    ['--muted', value('--gray-a3', '--gray-3', '--muted')],
+    ['--muted-foreground', value('--gray-11', '--muted-foreground')],
+    ['--accent', value('--accent-a3', '--accent-3', '--accent')],
+    ['--accent-foreground', value('--accent-12', '--accent-foreground')],
+    ['--border', value('--gray-a6', '--gray-6', '--border')],
+    ['--input', value('--gray-a7', '--gray-7', '--input')],
+    ['--ring', value('--focus-8', '--accent-8', '--ring')],
+    ['--radius', value('--radius-3', '--radius')],
+  ])
+
+  const rootStyle = document.documentElement.style
+  for (const [property, mappedValue] of semanticValues) {
+    if (!mappedValue)
+      continue
+    rootStyle.setProperty(property, mappedValue)
+    copiedHostProperties.add(property)
+  }
 }
 
 function copyHostProperties(hostDocument: Document): void {
@@ -95,7 +206,12 @@ function copyHostProperties(hostDocument: Document): void {
     return
 
   const values = new Map<string, string>()
-  const elements = [hostDocument.documentElement, hostDocument.body].filter(Boolean)
+  const elements = uniqueElements([
+    hostDocument.documentElement,
+    hostDocument.body,
+    ...frameAncestors(hostDocument).reverse(),
+    hostThemeScope(hostDocument),
+  ])
   for (const element of elements) {
     const style = hostWindow.getComputedStyle(element)
     for (let index = 0; index < style.length; index++) {
@@ -119,6 +235,7 @@ function copyHostProperties(hostDocument: Document): void {
     rootStyle.setProperty(property, value)
     copiedHostProperties.add(property)
   }
+  mapHostSemanticProperties(hostDocument)
 
   const bodyStyle = hostWindow.getComputedStyle(hostDocument.body || hostDocument.documentElement)
   if (bodyStyle.fontFamily)
@@ -135,10 +252,14 @@ function applyTheme(dark: boolean, hostDocument: Document | null): void {
     return
 
   const colorTheme = hostColorTheme(hostDocument)
-  if (colorTheme)
+  if (colorTheme) {
     root.setAttribute('data-color-theme', colorTheme)
-  else
+    root.setAttribute('data-accent-color', colorTheme)
+  }
+  else {
     root.removeAttribute('data-color-theme')
+    root.removeAttribute('data-accent-color')
+  }
   copyHostProperties(hostDocument)
 }
 
@@ -161,8 +282,13 @@ export function startSettingsThemeSync(): () => void {
   syncTheme()
   if (hostDocument) {
     observer?.observe(hostDocument.documentElement, observerOptions)
-    if (hostDocument.body)
-      observer?.observe(hostDocument.body, observerOptions)
+    if (hostDocument.body) {
+      observer?.observe(hostDocument.body, {
+        ...observerOptions,
+        childList: true,
+        subtree: true,
+      })
+    }
   }
 
   preferredTheme.addEventListener('change', syncTheme)
