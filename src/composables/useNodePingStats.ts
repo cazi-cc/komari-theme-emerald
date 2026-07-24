@@ -611,6 +611,10 @@ export function useNodePingStats(
     stats,
     loading,
     error,
+    tasksLoaded: computed(() => {
+      const { hours, enabled } = resolved.value
+      return enabled && getSharedPingRecordsEntry(hours).data.value !== null
+    }),
     tasks: computed(() => {
       const { hours, enabled } = resolved.value
       if (!enabled)

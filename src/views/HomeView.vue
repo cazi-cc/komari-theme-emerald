@@ -166,7 +166,8 @@ function getNodeItemTransitionStyle(index: number): Record<string, string> {
     <div class="px-4 pb-4">
       <button
         type="button"
-        class="group flex w-full items-center gap-3 rounded-md border border-emerald-600/15 bg-background/70 px-3 py-3 text-left shadow-sm transition-colors hover:border-emerald-600/35 hover:bg-background md:px-4"
+        class="network-comparison-cta group flex w-full items-center gap-3 rounded-md border border-emerald-600/20 bg-background/70 px-3 py-3 text-left shadow-sm transition-colors hover:border-emerald-600/45 hover:bg-background md:px-4"
+        :class="appStore.disablePageAnimation && 'network-comparison-cta--static'"
         @click="router.push({ name: 'network-comparison' })"
       >
         <span class="flex size-9 shrink-0 items-center justify-center rounded-md bg-emerald-600 text-white">
@@ -317,6 +318,59 @@ function getNodeItemTransitionStyle(index: number): Record<string, string> {
 </template>
 
 <style scoped>
+.network-comparison-cta {
+  position: relative;
+  isolation: isolate;
+  animation: network-comparison-breathe 2.8s ease-in-out infinite;
+}
+
+.network-comparison-cta::before {
+  position: absolute;
+  z-index: -1;
+  inset: -2px;
+  border: 1px solid rgb(16 185 129 / 22%);
+  border-radius: inherit;
+  box-shadow:
+    0 0 8px rgb(16 185 129 / 18%),
+    0 0 18px rgb(16 185 129 / 10%);
+  content: '';
+  pointer-events: none;
+  animation: network-comparison-breathe-ring 2.8s ease-in-out infinite;
+}
+
+.network-comparison-cta--static,
+.network-comparison-cta--static::before {
+  animation: none;
+}
+
+@keyframes network-comparison-breathe {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 0 rgb(16 185 129 / 8%),
+      0 0 8px rgb(16 185 129 / 12%);
+  }
+
+  50% {
+    box-shadow:
+      0 0 0 3px rgb(16 185 129 / 10%),
+      0 0 16px rgb(16 185 129 / 30%);
+  }
+}
+
+@keyframes network-comparison-breathe-ring {
+  0%,
+  100% {
+    opacity: 0.55;
+    transform: scale(0.998);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1.003);
+  }
+}
+
 .node-card-switch-enter-active,
 .node-card-switch-leave-active {
   transition:
@@ -346,9 +400,12 @@ function getNodeItemTransitionStyle(index: number): Record<string, string> {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .network-comparison-cta,
+  .network-comparison-cta::before,
   .node-card-switch-enter-active,
   .node-card-switch-leave-active,
   .node-card-switch-move {
+    animation: none;
     transition: none;
     transition-delay: 0ms;
   }

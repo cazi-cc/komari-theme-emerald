@@ -4,6 +4,23 @@ export const NETWORK_SCORE_MODEL_VERSION = 2
 
 export type PingChartLayout = 'combined' | 'split'
 
+export function filterAvailableHomePingTaskIds(
+  taskIds: readonly number[],
+  availableTaskIds: ReadonlySet<number>,
+): number[] {
+  return taskIds.filter(taskId => availableTaskIds.has(taskId))
+}
+
+export function resolveHomePingTaskId(
+  taskId: number | null,
+  tasksLoaded: boolean,
+  availableTaskIds: ReadonlySet<number>,
+): number | null {
+  if (taskId === null || !tasksLoaded)
+    return taskId
+  return availableTaskIds.has(taskId) ? taskId : null
+}
+
 export interface ThemeSettings {
   dataUpdateInterval: number
   rpcTransportMode: 'websocket' | 'http'

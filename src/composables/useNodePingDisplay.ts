@@ -4,6 +4,7 @@ import { computed, toValue } from 'vue'
 import { NODE_PING_BAR_COUNT, useNodePingStats } from '@/composables/useNodePingStats'
 import { useAppStore } from '@/stores/app'
 import { formatDateTime } from '@/utils/helper'
+import { resolveHomePingTaskId } from '@/utils/themeSettings'
 
 export type NodePingMetric = 'latency' | 'loss'
 
@@ -152,19 +153,27 @@ export function useNodePingDisplay(
   }
 
   function createTaskDisplay(taskId: number | null, rowIndex: number): NodePingTaskDisplay {
-    const taskStats = taskId === null
+    const availableTaskIds = new Set(pingStats.tasks.value.map(task => task.id))
+    const resolvedTaskId = resolveHomePingTaskId(
+      taskId,
+      pingStats.tasksLoaded.value,
+      availableTaskIds,
+    )
+    const taskStats = resolvedTaskId === null
       ? null
-      : pingStats.stats.value.taskStats.find(task => task.taskId === taskId) ?? null
-    const taskInfo = taskId === null ? null : pingStats.tasks.value.find(task => task.id === taskId)
-    const taskName = taskStats?.taskName || taskInfo?.name || (taskId === null ? '未配置' : `任务 ${taskId}`)
+      : pingStats.stats.value.taskStats.find(task => task.taskId === resolvedTaskId) ?? null
+    const taskInfo = resolvedTaskId === null
+      ? null
+      : pingStats.tasks.value.find(task => task.id === resolvedTaskId)
+    const taskName = taskStats?.taskName || taskInfo?.name || (resolvedTaskId === null ? '未配置' : '加载中')
     const latencyBars = taskStats ? buildPingBars('latency', taskStats.history, taskName) : buildEmptyPingBars('latency', taskName)
     const lossBars = taskStats ? buildPingBars('loss', taskStats.history, taskName) : buildEmptyPingBars('loss', taskName)
 
     return {
-      key: `${rowIndex}-${taskId ?? 'empty'}`,
-      taskId,
+      key: `${rowIndex}-${resolvedTaskId ?? 'empty'}`,
+      taskId: resolvedTaskId,
       taskName,
-      isPlaceholder: taskId === null,
+      isPlaceholder: resolvedTaskId === null,
       latencyRenderBars: latencyBars,
       lossRenderBars: lossBars,
       latencyDisplay: getDisplayText(taskStats, 'latency'),

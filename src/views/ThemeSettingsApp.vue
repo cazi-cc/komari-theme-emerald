@@ -4,6 +4,7 @@ import { Icon } from '@iconify/vue'
 import { computed, onMounted, reactive, ref } from 'vue'
 import {
   DEFAULT_THEME_SETTINGS,
+  filterAvailableHomePingTaskIds,
   MAX_HOME_PING_TASKS,
   normalizeThemeSettings,
   THEME_SHORT,
@@ -69,7 +70,7 @@ const taskMap = computed(() => new Map(tasks.value.map(task => [task.id, task]))
 const sortedNodes = computed(() => [...nodes.value].sort((left, right) => left.name.localeCompare(right.name, 'zh-CN')))
 const maximumSelectedTaskCount = computed(() => Math.max(
   1,
-  ...Object.values(settings.homePingTasksByNode).map(taskIds => taskIds.length),
+  ...nodes.value.map(node => selectedTaskIds(node.uuid).length),
 ))
 const scoreWeightTotal = computed(() => scoreWeightItems.reduce((total, item) => total + settings[item.key], 0))
 
@@ -109,10 +110,15 @@ function unselectedTasks(uuid: string): AdminPingTask[] {
 function ensureNodeSelections(): void {
   const next = { ...settings.homePingTasksByNode }
   for (const node of nodes.value) {
+    const assignedTasks = assignedTasksForNode(node.uuid)
+    const assignedTaskIds = new Set(assignedTasks.map(task => task.id))
     if (!(node.uuid in next)) {
-      next[node.uuid] = assignedTasksForNode(node.uuid)
+      next[node.uuid] = assignedTasks
         .slice(0, 2)
         .map(task => task.id)
+    }
+    else {
+      next[node.uuid] = filterAvailableHomePingTaskIds(next[node.uuid] ?? [], assignedTaskIds)
     }
   }
   settings.homePingTasksByNode = next
@@ -220,6 +226,7 @@ async function saveSettings(): Promise<void> {
   error.value = ''
   success.value = ''
   try {
+    ensureNodeSelections()
     const normalized = normalizeThemeSettings(settings)
     Object.assign(settings, normalized)
 
@@ -281,10 +288,10 @@ onMounted(loadSettings)
         </div>
 
         <div v-else class="space-y-4">
-          <div v-if="error" class="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-600">
+          <div v-if="error" class="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-600 dark:text-red-400">
             {{ error }}
           </div>
-          <div v-if="success" class="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700">
+          <div v-if="success" class="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700 dark:text-emerald-400">
             {{ success }}
           </div>
 
