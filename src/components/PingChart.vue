@@ -10,6 +10,7 @@ import { Spinner } from '@/components/ui/spinner'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useBackgroundSurface } from '@/composables/useBackgroundSurface'
 import { useAppStore } from '@/stores/app'
+import { loadPingChartData } from '@/utils/pingChartCache'
 import { cutPeakValues, interpolateNullsLinear } from '@/utils/recordHelper'
 import { getSharedRpc, RpcError } from '@/utils/rpc'
 import '@/utils/echarts' // 共享 ECharts 配置
@@ -195,6 +196,7 @@ const showDelay = ref(true)
 const showLoss = ref(true)
 const chartLayout = ref(appStore.themeSettings.pingChartLayout)
 const autoRefresh = ref(appStore.themeSettings.pingChartAutoRefresh)
+const analysisTaskId = ref<number | null>(null)
 const combinedChartRef = ref<unknown>(null)
 const latencyChartRef = ref<unknown>(null)
 const lossChartRef = ref<unknown>(null)
@@ -309,7 +311,7 @@ async function fetchLegacyRecords(uuid: string, hours: number): Promise<PingChar
   }
 }
 
-async function fetchRecords() {
+async function fetchRecords(options: { force?: boolean } = {}) {
   if (!props.uuid)
     return
 
@@ -321,23 +323,27 @@ async function fetchRecords() {
   error.value = null
 
   try {
-    let result: PingChartData
-    if (metricRpcSupported === false) {
-      result = await fetchLegacyRecords(uuid, hours)
-    }
-    else {
-      try {
-        result = await fetchMetricRecords(uuid, hours)
-        metricRpcSupported = true
-      }
-      catch (err) {
-        if (!isMethodNotFoundError(err))
-          throw err
+    const result = await loadPingChartData<PingChartData>(
+      `${uuid}:${hours}`,
+      async () => {
+        if (metricRpcSupported === false)
+          return fetchLegacyRecords(uuid, hours)
 
-        metricRpcSupported = false
-        result = await fetchLegacyRecords(uuid, hours)
-      }
-    }
+        try {
+          const metricResult = await fetchMetricRecords(uuid, hours)
+          metricRpcSupported = true
+          return metricResult
+        }
+        catch (err) {
+          if (!isMethodNotFoundError(err))
+            throw err
+
+          metricRpcSupported = false
+          return fetchLegacyRecords(uuid, hours)
+        }
+      },
+      options.force === true,
+    )
 
     if (requestId !== fetchRequestId)
       return
@@ -509,6 +515,22 @@ const latestValues = computed(() => {
 const selectedTasks = computed(() => {
   return tasks.value.filter(t => selectedTaskIds.value.includes(t.id))
 })
+
+const analysisTask = computed(() => {
+  return latestValues.value.find(task => task.id === analysisTaskId.value)
+    ?? latestValues.value[0]
+    ?? null
+})
+
+watch(latestValues, (values) => {
+  if (!values.length) {
+    analysisTaskId.value = null
+    return
+  }
+
+  if (!values.some(task => task.id === analysisTaskId.value))
+    analysisTaskId.value = values[0]?.id ?? null
+}, { immediate: true })
 
 function getTaskPercentile(taskId: number, percentile: number): number | null {
   const values = remoteData.value
@@ -761,6 +783,7 @@ const lossChartOption = computed(() => buildPingChartOption('loss'))
 
 function focusTask(taskId: number): void {
   selectedTaskIds.value = [taskId]
+  analysisTaskId.value = taskId
 }
 
 function downloadBlob(content: BlobPart, mime: string, filename: string): void {
@@ -817,7 +840,8 @@ function resetAutoRefreshTimer(): void {
   if (!autoRefresh.value)
     return
   autoRefreshTimer = setInterval(() => {
-    void fetchRecords()
+    if (document.visibilityState === 'visible')
+      void fetchRecords({ force: true })
   }, appStore.themeSettings.pingChartRefreshInterval * 1000)
 }
 
@@ -891,100 +915,189 @@ onUnmounted(() => {
       </div>
 
       <template v-else>
-        <!-- 最新值统计卡片（可点击切换选中状态） -->
-        <div
-          v-if="latestValues.length > 0" class="gap-3 grid"
-          style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr))"
-        >
-          <div
-            v-for="task in latestValues" :key="task.id"
-            class="flex cursor-pointer select-none items-center gap-3 rounded-md p-2 transition-all bg-background/60 hover:bg-background hover:shadow-[0_0_0_1px] hover:shadow-emerald-600/10"
-            :class="[
-              !selectedTaskIds.includes(task.id) && 'opacity-30',
-            ]"
-            :onmouseover="(e: MouseEvent) => ((e.currentTarget as HTMLElement).style.borderColor = task.color)"
-            :onmouseout="(e: MouseEvent) => ((e.currentTarget as HTMLElement).style.borderColor = '')"
-            @click="toggleTask(task.id)"
-          >
-            <div class="flex-1 min-w-0">
-              <div class="flex gap-2 items-center">
-                <div class="rounded h-4 w-1" :style="{ backgroundColor: task.color }" />
-                <span class="text-sm font-semibold truncate">{{ task.name }}</span>
-                <div class="flex-1" />
+        <section v-if="latestValues.length > 0" class="space-y-3">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <h3 class="text-sm font-semibold">
+              延迟数据分析
+            </h3>
+            <label class="flex items-center gap-2 text-xs text-muted-foreground">
+              <span>分析任务</span>
+              <select
+                v-model.number="analysisTaskId"
+                class="h-8 max-w-52 rounded-md border border-border bg-background px-2 text-xs text-foreground"
+              >
+                <option v-for="task in latestValues" :key="task.id" :value="task.id">
+                  {{ task.name }}
+                </option>
+              </select>
+            </label>
+          </div>
+
+          <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            <div
+              v-for="task in latestValues" :key="task.id"
+              class="min-w-0 rounded-md border bg-background/60 p-3 transition-colors"
+              :class="[
+                selectedTaskIds.includes(task.id) ? 'border-emerald-600/25' : 'border-border opacity-60',
+                analysisTask?.id === task.id && 'ring-1 ring-emerald-600/40',
+              ]"
+            >
+              <div class="flex min-w-0 items-center gap-2">
+                <div class="h-5 w-1 shrink-0 rounded" :style="{ backgroundColor: task.color }" />
+                <span class="min-w-0 flex-1 truncate text-sm font-semibold" :title="task.name">{{ task.name }}</span>
                 <Button
-                  variant="ghost" size="icon-xs" class="text-slate-500"
-                  title="仅查看此任务" @click.stop="focusTask(task.id)"
+                  variant="ghost" size="icon-xs" :title="selectedTaskIds.includes(task.id) ? '隐藏曲线' : '显示曲线'"
+                  @click="toggleTask(task.id)"
                 >
-                  <Icon icon="lucide:focus" :width="14" :height="14" />
+                  <Icon :icon="selectedTaskIds.includes(task.id) ? 'lucide:eye' : 'lucide:eye-off'" :width="14" :height="14" />
                 </Button>
-                <DataTooltip placement="left" content-class="!rounded p-3 w-60 backdrop-blur">
-                  <Button variant="ghost" size="icon-xs" class="text-slate-500" @click.stop>
-                    <Icon icon="carbon:information" :width="14" :height="14" />
-                  </Button>
-                  <template #content>
-                    <div class="text-xs gap-x-4 gap-y-1.5 grid grid-cols-4">
-                      <template v-if="task.min !== undefined">
-                        <span class="text-muted-foreground">最小</span>
-                        <span class="font-medium">{{ Math.round(task.min) }} ms</span>
-                      </template>
-                      <template v-if="task.max !== undefined">
-                        <span class="text-muted-foreground">最大</span>
-                        <span class="font-medium">{{ Math.round(task.max) }} ms</span>
-                      </template>
-                      <template v-if="task.avg !== undefined">
-                        <span class="text-muted-foreground">平均</span>
-                        <span class="font-medium">{{ Math.round(task.avg) }} ms</span>
-                      </template>
-                      <template v-if="task.latest !== undefined">
-                        <span class="text-muted-foreground">最新</span>
-                        <span class="font-medium">{{ Math.round(task.latest) }} ms</span>
-                      </template>
-                      <template v-if="task.p50 !== undefined">
-                        <span class="text-muted-foreground">P50</span>
-                        <span class="font-medium">{{ Math.round(task.p50) }} ms</span>
-                      </template>
-                      <template v-if="task.p95 !== null">
-                        <span class="text-muted-foreground">P95</span>
-                        <span class="font-medium">{{ Math.round(task.p95) }} ms</span>
-                      </template>
-                      <template v-if="task.p99 !== undefined">
-                        <span class="text-muted-foreground">P99</span>
-                        <span class="font-medium">{{ Math.round(task.p99) }} ms</span>
-                      </template>
-                      <template v-if="task.p99_p50_ratio !== undefined">
-                        <span class="text-muted-foreground">波动率</span>
-                        <span class="font-medium">{{ task.p99_p50_ratio.toFixed(2) }}</span>
-                      </template>
-                      <template v-if="task.interval !== undefined">
-                        <span class="text-muted-foreground">间隔</span>
-                        <span class="font-medium">{{ task.interval }}s</span>
-                      </template>
-                      <template v-if="task.type">
-                        <span class="text-muted-foreground">类型</span>
-                        <span class="font-medium">{{ task.type.toUpperCase() }}</span>
-                      </template>
-                      <template v-if="task.total !== undefined">
-                        <span class="text-muted-foreground">总数</span>
-                        <span class="font-medium">{{ task.total }}</span>
-                      </template>
-                    </div>
-                  </template>
-                </DataTooltip>
+                <Button variant="ghost" size="xs" class="h-7 px-2 text-xs" @click="analysisTaskId = task.id">
+                  分析
+                </Button>
               </div>
-              <div class="text-xs mt-1 flex gap-1.5 items-center text-muted-foreground">
-                <span class="font-medium" title="平均延迟">
-                  {{ task.avg !== undefined ? `${Math.round(task.avg)}ms` : '-' }}
-                </span>
-                <span class="opacity-60">·</span>
-                <span title="丢包率">{{ task.loss.toFixed(2) }}%</span>
-                <template v-if="task.p99_p50_ratio !== undefined">
-                  <span class="opacity-60">·</span>
-                  <span title="波动率">{{ task.p99_p50_ratio.toFixed(2) }}</span>
-                </template>
+              <div class="mt-3 grid grid-cols-3 gap-2">
+                <div class="min-w-0">
+                  <div class="text-[11px] text-muted-foreground">
+                    平均
+                  </div>
+                  <div class="truncate text-sm font-semibold tabular-nums">
+                    {{ task.avg !== undefined ? `${Math.round(task.avg)} ms` : '--' }}
+                  </div>
+                </div>
+                <div class="min-w-0">
+                  <div class="text-[11px] text-muted-foreground">
+                    丢包
+                  </div>
+                  <div class="truncate text-sm font-semibold tabular-nums">
+                    {{ task.loss.toFixed(2) }}%
+                  </div>
+                </div>
+                <div class="min-w-0">
+                  <div class="text-[11px] text-muted-foreground">
+                    P95
+                  </div>
+                  <div class="truncate text-sm font-semibold tabular-nums">
+                    {{ task.p95 !== null ? `${Math.round(task.p95)} ms` : '--' }}
+                  </div>
+                </div>
               </div>
             </div>
           </div>
-        </div>
+
+          <div
+            v-if="analysisTask"
+            class="min-w-0 rounded-md border border-emerald-600/20 bg-background/70 p-3 sm:p-4"
+          >
+            <div class="mb-3 flex min-w-0 flex-wrap items-center gap-2">
+              <div class="h-5 w-1 shrink-0 rounded" :style="{ backgroundColor: analysisTask.color }" />
+              <h4 class="min-w-0 flex-1 truncate text-sm font-semibold" :title="analysisTask.name">
+                {{ analysisTask.name }}
+              </h4>
+              <Button variant="ghost" size="xs" class="h-7 text-xs" @click="focusTask(analysisTask.id)">
+                <Icon icon="lucide:focus" :width="13" :height="13" />
+                仅看此任务
+              </Button>
+            </div>
+            <div class="grid grid-cols-2 gap-x-3 gap-y-4 sm:grid-cols-4 lg:grid-cols-6">
+              <div>
+                <div class="text-[11px] text-muted-foreground">
+                  最小延迟
+                </div>
+                <div class="mt-0.5 text-sm font-semibold tabular-nums">
+                  {{ analysisTask.min !== undefined ? `${Math.round(analysisTask.min)} ms` : '--' }}
+                </div>
+              </div>
+              <div>
+                <div class="text-[11px] text-muted-foreground">
+                  平均延迟
+                </div>
+                <div class="mt-0.5 text-sm font-semibold tabular-nums">
+                  {{ analysisTask.avg !== undefined ? `${Math.round(analysisTask.avg)} ms` : '--' }}
+                </div>
+              </div>
+              <div>
+                <div class="text-[11px] text-muted-foreground">
+                  最大延迟
+                </div>
+                <div class="mt-0.5 text-sm font-semibold tabular-nums">
+                  {{ analysisTask.max !== undefined ? `${Math.round(analysisTask.max)} ms` : '--' }}
+                </div>
+              </div>
+              <div>
+                <div class="text-[11px] text-muted-foreground">
+                  最新延迟
+                </div>
+                <div class="mt-0.5 text-sm font-semibold tabular-nums">
+                  {{ analysisTask.latest !== undefined ? `${Math.round(analysisTask.latest)} ms` : '--' }}
+                </div>
+              </div>
+              <div>
+                <div class="text-[11px] text-muted-foreground">
+                  P50
+                </div>
+                <div class="mt-0.5 text-sm font-semibold tabular-nums">
+                  {{ analysisTask.p50 !== undefined ? `${Math.round(analysisTask.p50)} ms` : '--' }}
+                </div>
+              </div>
+              <div>
+                <div class="text-[11px] text-muted-foreground">
+                  P95
+                </div>
+                <div class="mt-0.5 text-sm font-semibold tabular-nums">
+                  {{ analysisTask.p95 !== null ? `${Math.round(analysisTask.p95)} ms` : '--' }}
+                </div>
+              </div>
+              <div>
+                <div class="text-[11px] text-muted-foreground">
+                  P99
+                </div>
+                <div class="mt-0.5 text-sm font-semibold tabular-nums">
+                  {{ analysisTask.p99 !== undefined ? `${Math.round(analysisTask.p99)} ms` : '--' }}
+                </div>
+              </div>
+              <div>
+                <div class="text-[11px] text-muted-foreground">
+                  丢包率
+                </div>
+                <div class="mt-0.5 text-sm font-semibold tabular-nums">
+                  {{ analysisTask.loss.toFixed(2) }}%
+                </div>
+              </div>
+              <div>
+                <div class="text-[11px] text-muted-foreground">
+                  波动率
+                </div>
+                <div class="mt-0.5 text-sm font-semibold tabular-nums">
+                  {{ analysisTask.p99_p50_ratio !== undefined ? analysisTask.p99_p50_ratio.toFixed(2) : '--' }}
+                </div>
+              </div>
+              <div>
+                <div class="text-[11px] text-muted-foreground">
+                  样本数
+                </div>
+                <div class="mt-0.5 text-sm font-semibold tabular-nums">
+                  {{ analysisTask.total ?? '--' }}
+                </div>
+              </div>
+              <div>
+                <div class="text-[11px] text-muted-foreground">
+                  采集间隔
+                </div>
+                <div class="mt-0.5 text-sm font-semibold tabular-nums">
+                  {{ analysisTask.interval !== undefined ? `${analysisTask.interval}s` : '--' }}
+                </div>
+              </div>
+              <div>
+                <div class="text-[11px] text-muted-foreground">
+                  协议
+                </div>
+                <div class="mt-0.5 text-sm font-semibold">
+                  {{ analysisTask.type?.toUpperCase() || '--' }}
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
 
         <div class="flex flex-wrap gap-2 items-center py-2">
           <!-- 延迟可视化开关 -->
@@ -1042,7 +1155,7 @@ onUnmounted(() => {
           </Button>
           <Button
             variant="ghost" size="icon-xs" class="bg-background/60" title="立即刷新"
-            :disabled="loading" @click="fetchRecords"
+            :disabled="loading" @click="fetchRecords({ force: true })"
           >
             <Icon icon="lucide:refresh-cw" :class="loading && 'animate-spin'" :width="14" :height="14" />
           </Button>

@@ -56,7 +56,7 @@ const settings = reactive<ThemeSettings>({ ...DEFAULT_THEME_SETTINGS })
 
 const taskMap = computed(() => new Map(tasks.value.map(task => [task.id, task])))
 const sortedNodes = computed(() => [...nodes.value].sort((left, right) => left.name.localeCompare(right.name, 'zh-CN')))
-const globalTaskRows = computed(() => Math.max(
+const maximumSelectedTaskCount = computed(() => Math.max(
   1,
   ...Object.values(settings.homePingTasksByNode).map(taskIds => taskIds.length),
 ))
@@ -94,10 +94,6 @@ function unselectedTasks(uuid: string): AdminPingTask[] {
   return assignedTasksForNode(uuid).filter(task => !selected.has(task.id))
 }
 
-function syncRowCount(): void {
-  settings.homePingRowCount = Math.min(MAX_HOME_PING_TASKS, globalTaskRows.value)
-}
-
 function ensureNodeSelections(): void {
   const next = { ...settings.homePingTasksByNode }
   for (const node of nodes.value) {
@@ -108,7 +104,6 @@ function ensureNodeSelections(): void {
     }
   }
   settings.homePingTasksByNode = next
-  syncRowCount()
 }
 
 function addTask(uuid: string, taskId: number): void {
@@ -116,7 +111,6 @@ function addTask(uuid: string, taskId: number): void {
   if (current.includes(taskId) || current.length >= MAX_HOME_PING_TASKS)
     return
   settings.homePingTasksByNode = { ...settings.homePingTasksByNode, [uuid]: [...current, taskId] }
-  syncRowCount()
 }
 
 function removeTask(uuid: string, taskId: number): void {
@@ -124,7 +118,6 @@ function removeTask(uuid: string, taskId: number): void {
     ...settings.homePingTasksByNode,
     [uuid]: selectedTaskIds(uuid).filter(id => id !== taskId),
   }
-  syncRowCount()
 }
 
 function moveTask(uuid: string, taskId: number, offset: number): void {
@@ -215,7 +208,6 @@ async function saveSettings(): Promise<void> {
   error.value = ''
   success.value = ''
   try {
-    syncRowCount()
     const normalized = normalizeThemeSettings(settings)
     Object.assign(settings, normalized)
 
@@ -287,9 +279,50 @@ onMounted(loadSettings)
                 每节点首页延迟任务
               </h2>
               <p class="mt-1 text-sm text-muted-foreground">
-                每个节点最多选择 {{ MAX_HOME_PING_TASKS }} 项。所有首页卡片统一预留 {{ globalTaskRows }} 行，缺失数据以 -- 占位。
+                每个节点最多选择 {{ MAX_HOME_PING_TASKS }} 项。
               </p>
             </header>
+
+            <div class="rounded-md border border-border bg-card p-4">
+              <div class="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h3 class="text-sm font-semibold">
+                    首页卡片统一行数
+                  </h3>
+                  <p class="mt-1 text-xs text-muted-foreground">
+                    当前任务最多的节点已选择 {{ maximumSelectedTaskCount }} 项
+                  </p>
+                </div>
+                <div class="flex items-center gap-2">
+                  <button
+                    type="button" class="size-8 rounded-md border border-border bg-background text-lg disabled:opacity-30"
+                    title="减少一行" :disabled="settings.homePingRowCount <= 1"
+                    @click="settings.homePingRowCount = Math.max(1, settings.homePingRowCount - 1)"
+                  >
+                    −
+                  </button>
+                  <input
+                    v-model.number="settings.homePingRowCount" type="number" min="1" :max="MAX_HOME_PING_TASKS"
+                    class="h-8 w-16 rounded-md border border-border bg-background px-2 text-center text-sm font-semibold"
+                    aria-label="首页卡片统一行数"
+                  >
+                  <button
+                    type="button" class="size-8 rounded-md border border-border bg-background text-lg disabled:opacity-30"
+                    title="增加一行" :disabled="settings.homePingRowCount >= MAX_HOME_PING_TASKS"
+                    @click="settings.homePingRowCount = Math.min(MAX_HOME_PING_TASKS, settings.homePingRowCount + 1)"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
+              <input
+                v-model.number="settings.homePingRowCount" type="range" min="1" :max="MAX_HOME_PING_TASKS" step="1"
+                class="mt-4 h-2 w-full cursor-pointer accent-emerald-600" aria-label="调整首页卡片统一行数"
+              >
+              <div class="mt-2 grid grid-cols-8 text-center text-[11px] text-muted-foreground">
+                <span v-for="row in MAX_HOME_PING_TASKS" :key="row">{{ row }}</span>
+              </div>
+            </div>
 
             <div v-for="node in sortedNodes" :key="node.uuid" class="rounded-md border border-border bg-card p-4">
               <div class="mb-3 flex flex-wrap items-start justify-between gap-2">
