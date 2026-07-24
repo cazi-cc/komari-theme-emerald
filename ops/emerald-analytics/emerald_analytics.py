@@ -15,7 +15,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+SCORE_MODEL_VERSION = 2
 THEME_SHORT = "Emerald-Cazi"
 WINDOW_GROUPS = {
     "fast": [1],
@@ -25,15 +26,15 @@ WINDOW_GROUPS = {
 }
 DEFAULTS = {
     "networkScoreLossWeight": 40.0,
-    "networkScoreP50Weight": 25.0,
-    "networkScoreP95Weight": 20.0,
-    "networkScoreVolatilityWeight": 10.0,
-    "networkScoreCoverageWeight": 5.0,
+    "networkScoreP50Weight": 30.0,
+    "networkScoreP95Weight": 25.0,
+    "networkScoreVolatilityWeight": 3.0,
+    "networkScoreCoverageWeight": 2.0,
     "networkScoreMinSamples": 30,
     "networkScoreMinCoverage": 20.0,
-    "networkScoreExcellentThreshold": 85.0,
-    "networkScoreGoodThreshold": 70.0,
-    "networkScoreFairThreshold": 55.0,
+    "networkScoreExcellentThreshold": 95.0,
+    "networkScoreGoodThreshold": 85.0,
+    "networkScoreFairThreshold": 70.0,
 }
 
 
@@ -124,35 +125,37 @@ def load_source_data(connection: sqlite3.Connection) -> tuple[list[dict[str, Any
 
 
 def scoring_config(settings: dict[str, Any]) -> dict[str, Any]:
+    settings_model_version = int(finite_number(settings.get("networkScoreModelVersion"), 1))
+    score_settings = settings if settings_model_version >= SCORE_MODEL_VERSION else {}
     raw_weights = {
-        "loss": clamp(finite_number(settings.get("networkScoreLossWeight"), DEFAULTS["networkScoreLossWeight"]), 0, 100),
-        "p50": clamp(finite_number(settings.get("networkScoreP50Weight"), DEFAULTS["networkScoreP50Weight"]), 0, 100),
-        "p95": clamp(finite_number(settings.get("networkScoreP95Weight"), DEFAULTS["networkScoreP95Weight"]), 0, 100),
+        "loss": clamp(finite_number(score_settings.get("networkScoreLossWeight"), DEFAULTS["networkScoreLossWeight"]), 0, 100),
+        "p50": clamp(finite_number(score_settings.get("networkScoreP50Weight"), DEFAULTS["networkScoreP50Weight"]), 0, 100),
+        "p95": clamp(finite_number(score_settings.get("networkScoreP95Weight"), DEFAULTS["networkScoreP95Weight"]), 0, 100),
         "volatility": clamp(
-            finite_number(settings.get("networkScoreVolatilityWeight"), DEFAULTS["networkScoreVolatilityWeight"]),
+            finite_number(score_settings.get("networkScoreVolatilityWeight"), DEFAULTS["networkScoreVolatilityWeight"]),
             0,
             100,
         ),
         "coverage": clamp(
-            finite_number(settings.get("networkScoreCoverageWeight"), DEFAULTS["networkScoreCoverageWeight"]),
+            finite_number(score_settings.get("networkScoreCoverageWeight"), DEFAULTS["networkScoreCoverageWeight"]),
             0,
             100,
         ),
     }
     total = sum(raw_weights.values())
     if total <= 0:
-        raw_weights = {"loss": 40.0, "p50": 25.0, "p95": 20.0, "volatility": 10.0, "coverage": 5.0}
+        raw_weights = {"loss": 40.0, "p50": 30.0, "p95": 25.0, "volatility": 3.0, "coverage": 2.0}
         total = 100.0
     weights = {key: round(value * 100 / total, 4) for key, value in raw_weights.items()}
     fair_threshold = clamp(
-        finite_number(settings.get("networkScoreFairThreshold"), DEFAULTS["networkScoreFairThreshold"]),
+        finite_number(score_settings.get("networkScoreFairThreshold"), DEFAULTS["networkScoreFairThreshold"]),
         0,
         100,
     )
     good_threshold = max(
         fair_threshold,
         clamp(
-            finite_number(settings.get("networkScoreGoodThreshold"), DEFAULTS["networkScoreGoodThreshold"]),
+            finite_number(score_settings.get("networkScoreGoodThreshold"), DEFAULTS["networkScoreGoodThreshold"]),
             0,
             100,
         ),
@@ -161,7 +164,7 @@ def scoring_config(settings: dict[str, Any]) -> dict[str, Any]:
         good_threshold,
         clamp(
             finite_number(
-                settings.get("networkScoreExcellentThreshold"), DEFAULTS["networkScoreExcellentThreshold"]
+                score_settings.get("networkScoreExcellentThreshold"), DEFAULTS["networkScoreExcellentThreshold"]
             ),
             0,
             100,
@@ -169,6 +172,8 @@ def scoring_config(settings: dict[str, Any]) -> dict[str, Any]:
     )
     return {
         "name": "同任务网络质量对比指数",
+        "model_version": SCORE_MODEL_VERSION,
+        "volatility_scale": "absolute_ratio",
         "weights": weights,
         "minimum_samples": max(
             1, int(finite_number(settings.get("networkScoreMinSamples"), DEFAULTS["networkScoreMinSamples"]))
@@ -305,6 +310,28 @@ def loss_score(loss_percent: float) -> float:
     return 0.0
 
 
+def volatility_score(volatility: float) -> float:
+    """Score P95/P50 spread against fixed ratios so small group differences are not exaggerated."""
+    breakpoints = [
+        (0.0, 100.0),
+        (0.05, 95.0),
+        (0.10, 85.0),
+        (0.20, 65.0),
+        (0.50, 20.0),
+        (1.00, 0.0),
+    ]
+    value = max(0.0, volatility)
+    if value <= breakpoints[0][0]:
+        return breakpoints[0][1]
+    for index in range(1, len(breakpoints)):
+        left_x, left_y = breakpoints[index - 1]
+        right_x, right_y = breakpoints[index]
+        if value <= right_x:
+            ratio = (value - left_x) / (right_x - left_x)
+            return round(left_y + ratio * (right_y - left_y), 4)
+    return 0.0
+
+
 def grade_for(score: float | None, thresholds: dict[str, float]) -> str:
     if score is None:
         return "未评级"
@@ -396,14 +423,13 @@ def build_window(
         if ranking_available:
             p50_values = [node["p50"] for node in eligible]
             p95_values = [node["p95"] for node in eligible]
-            volatility_values = [node["volatility"] for node in eligible]
             weights = config["weights"]
             for node in eligible:
                 components = {
                     "loss": loss_score(node["loss_percent"]),
                     "p50": robust_score(p50_values, node["p50"]),
                     "p95": robust_score(p95_values, node["p95"]),
-                    "volatility": robust_score(volatility_values, node["volatility"]),
+                    "volatility": volatility_score(node["volatility"]),
                     "coverage": clamp(node["coverage_percent"], 0, 100),
                 }
                 score = sum(components[key] * weights[key] for key in components) / 100

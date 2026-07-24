@@ -31,6 +31,13 @@ import '@/utils/echarts'
 
 type MobileSection = 'ranking' | 'distribution' | 'trend' | 'details'
 type TrendMetric = 'latency' | 'loss'
+interface RangeRenderParams {
+  dataIndex: number
+}
+interface RangeRenderApi {
+  value: (dimension: number) => unknown
+  coord: (data: [number, number]) => [number, number]
+}
 
 const router = useRouter()
 const appStore = useAppStore()
@@ -92,6 +99,16 @@ const chartNodes = computed(() => sortedNodes.value.filter(node => node.p50 !== 
 const scoredNodes = computed(() => sortedNodes.value.filter(node => node.rank !== null && node.score !== null))
 const lossFreeNodeCount = computed(() => sortedNodes.value.filter(node => node.samples > 0 && node.loss_count === 0).length)
 const bestNode = computed(() => scoredNodes.value[0] ?? null)
+const rangeAxisBounds = computed(() => {
+  const minimum = Math.min(...chartNodes.value.map(node => node.p50 ?? 0))
+  const maximum = Math.max(...chartNodes.value.map(node => node.p95 ?? 0))
+  if (!Number.isFinite(minimum) || !Number.isFinite(maximum))
+    return { min: 0, max: 100 }
+  const span = Math.max(10, maximum - minimum)
+  const min = Math.max(0, Math.floor((minimum - Math.max(5, span * 0.06)) / 10) * 10)
+  const max = Math.ceil((maximum + Math.max(35, span * 0.18)) / 10) * 10
+  return { min, max: Math.max(min + 10, max) }
+})
 const generatedAt = computed(() => windowData.value?.generated_at ?? manifest.value?.generated_at ?? '')
 const cacheAgeMinutes = computed(() => generatedAt.value ? Math.max(0, dayjs().diff(dayjs(generatedAt.value), 'minute')) : 0)
 const isCacheStale = computed(() => {
@@ -104,6 +121,7 @@ const nodeStateMap = computed(() => new Map(nodesStore.nodes.map(node => [node.u
 const isDark = computed(() => appStore.isDark)
 const chartTextColor = computed(() => isDark.value ? 'rgba(255,255,255,.68)' : 'rgba(15,23,42,.66)')
 const chartSplitColor = computed(() => isDark.value ? 'rgba(255,255,255,.08)' : 'rgba(15,23,42,.08)')
+const rangeEndpointFill = computed(() => isDark.value ? '#090D14' : '#FFFFFF')
 
 function escapeHtml(value: string): string {
   return value
@@ -117,6 +135,10 @@ function escapeHtml(value: string): string {
 function nodeColor(uuid: string): string {
   const index = sortedNodes.value.findIndex(node => node.uuid === uuid)
   return chartColors[Math.max(0, index) % chartColors.length] ?? '#059669'
+}
+
+function nodePublicRemark(uuid: string): string {
+  return nodeStateMap.value.get(uuid)?.public_remark?.trim() ?? ''
 }
 
 function gradeClass(grade: string): string {
@@ -224,23 +246,24 @@ async function fetchTrend(force = false): Promise<void> {
 
 const rangeChartOption = computed(() => ({
   animationDuration: appStore.disablePageAnimation ? 0 : 350,
-  color: ['transparent', '#34D399'],
   tooltip: {
-    trigger: 'axis',
-    axisPointer: { type: 'shadow' },
+    trigger: 'item',
+    confine: true,
     formatter: (params: unknown) => {
-      if (!Array.isArray(params) || !params.length)
-        return ''
-      const index = Number((params[0] as { dataIndex?: number }).dataIndex ?? -1)
+      const index = Number((params as { dataIndex?: number }).dataIndex ?? -1)
       const node = chartNodes.value[index]
       if (!node)
         return ''
-      return `<strong>${escapeHtml(node.name)}</strong><br>P50&nbsp;&nbsp;${Math.round(node.p50 ?? 0)} ms<br>P95&nbsp;&nbsp;${Math.round(node.p95 ?? 0)} ms`
+      const remark = nodePublicRemark(node.uuid) || '暂无公开备注'
+      const spread = Math.max(0, (node.p95 ?? 0) - (node.p50 ?? 0))
+      return `<div style="max-width:260px;white-space:normal"><strong>${escapeHtml(node.name)}</strong><br><span style="opacity:.72">公开备注&nbsp;&nbsp;${escapeHtml(remark)}</span><br>P50&nbsp;&nbsp;${Math.round(node.p50 ?? 0)} ms<br>P95&nbsp;&nbsp;${Math.round(node.p95 ?? 0)} ms<br>区间差&nbsp;&nbsp;${spread.toFixed(1)} ms</div>`
     },
   },
-  grid: { top: 12, right: 24, bottom: 30, left: 112, containLabel: false },
+  grid: { top: 12, right: 24, bottom: 30, left: 118, containLabel: false },
   xAxis: {
     type: 'value',
+    min: rangeAxisBounds.value.min,
+    max: rangeAxisBounds.value.max,
     name: '延迟 (ms)',
     nameTextStyle: { color: chartTextColor.value, fontSize: 11 },
     axisLabel: { color: chartTextColor.value, fontSize: 10 },
@@ -254,38 +277,71 @@ const rangeChartOption = computed(() => ({
     axisLine: { show: false },
     axisTick: { show: false },
   },
-  series: [
-    {
-      name: 'P50',
-      type: 'bar',
-      stack: 'latency',
-      silent: true,
-      itemStyle: { color: 'transparent' },
-      emphasis: { disabled: true },
-      data: chartNodes.value.map(node => node.p50),
+  series: [{
+    name: 'P50-P95 区间',
+    type: 'custom',
+    renderItem: (_params: RangeRenderParams, api: RangeRenderApi) => {
+      const categoryIndex = Number(api.value(0))
+      const p50 = Number(api.value(1))
+      const p95 = Number(api.value(2))
+      const start = api.coord([p50, categoryIndex])
+      const end = api.coord([p95, categoryIndex])
+      const label = `${Math.round(p50)}–${Math.round(p95)} ms`
+      return {
+        type: 'group',
+        children: [
+          {
+            type: 'line',
+            shape: { x1: start[0], y1: start[1], x2: end[0], y2: end[1] },
+            style: { stroke: '#34D399', lineWidth: 4, lineCap: 'round' },
+          },
+          {
+            type: 'circle',
+            shape: { cx: start[0], cy: start[1], r: 5 },
+            style: { fill: '#5EEAA6', stroke: '#047857', lineWidth: 1 },
+          },
+          {
+            type: 'circle',
+            shape: { cx: end[0], cy: end[1], r: 5 },
+            style: { fill: rangeEndpointFill.value, stroke: '#34D399', lineWidth: 2 },
+          },
+          {
+            type: 'text',
+            style: {
+              x: end[0] + 9,
+              y: end[1],
+              text: label,
+              fill: chartTextColor.value,
+              fontSize: 10,
+              fontWeight: 600,
+              verticalAlign: 'middle',
+            },
+          },
+        ],
+      }
     },
-    {
-      name: 'P50-P95 区间',
-      type: 'bar',
-      stack: 'latency',
-      barWidth: 11,
-      itemStyle: { borderRadius: [0, 3, 3, 0] },
-      data: chartNodes.value.map(node => Math.max(0, (node.p95 ?? 0) - (node.p50 ?? 0))),
-    },
-  ],
+    encode: { x: [1, 2], y: 0 },
+    data: chartNodes.value.map((node, index) => [index, node.p50, node.p95]),
+  }],
 }))
 
 const scatterChartOption = computed(() => ({
   animationDuration: appStore.disablePageAnimation ? 0 : 350,
   tooltip: {
     trigger: 'item',
+    confine: true,
     formatter: (params: unknown) => {
-      const data = (params as { data?: unknown[] }).data
+      const data = (params as { value?: unknown[] }).value
       if (!Array.isArray(data))
         return ''
       const name = String(data[2] ?? '')
       const score = typeof data[3] === 'number' ? data[3].toFixed(1) : '--'
-      return `<strong>${escapeHtml(name)}</strong><br>P50&nbsp;&nbsp;${Math.round(Number(data[0]))} ms<br>丢包&nbsp;&nbsp;${formatLossRate(Number(data[1]))}<br>评分&nbsp;&nbsp;${score}`
+      const uuid = String(data[4] ?? '')
+      const p95 = Number(data[5])
+      const lossCount = Number(data[6])
+      const grade = String(data[7] ?? '未评级')
+      const remark = nodePublicRemark(uuid) || '暂无公开备注'
+      return `<div style="max-width:280px;white-space:normal"><strong>${escapeHtml(name)}</strong><br><span style="opacity:.72">公开备注&nbsp;&nbsp;${escapeHtml(remark)}</span><br>P50 / P95&nbsp;&nbsp;${Math.round(Number(data[0]))} / ${Math.round(p95)} ms<br>丢包&nbsp;&nbsp;${formatLossRate(Number(data[1]))}（${lossCount.toLocaleString()} 次）<br>评分&nbsp;&nbsp;${score} · ${escapeHtml(grade)}</div>`
     },
   },
   grid: { top: 18, right: 24, bottom: 42, left: 54 },
@@ -309,7 +365,7 @@ const scatterChartOption = computed(() => ({
     type: 'scatter',
     symbolSize: 13,
     data: chartNodes.value.map((node, index) => ({
-      value: [node.p50, node.loss_percent, node.name, node.score],
+      value: [node.p50, node.loss_percent, node.name, node.score, node.uuid, node.p95, node.loss_count, node.grade],
       itemStyle: { color: chartColors[index % chartColors.length] },
     })),
   }],
@@ -467,144 +523,152 @@ onMounted(() => {
       </div>
 
       <template v-else>
-        <div class="grid grid-cols-2 gap-2 md:grid-cols-4">
-          <div class="min-w-0 rounded-md bg-background/70 p-3">
-            <div class="text-[11px] text-muted-foreground">
-              有效节点
-            </div>
-            <div class="mt-1 text-xl font-bold tabular-nums">
-              {{ selectedTask.rankable_node_count }}<span class="ml-1 text-xs font-normal text-muted-foreground">/ {{ selectedTask.node_count }}</span>
-            </div>
-          </div>
-          <div class="min-w-0 rounded-md bg-background/70 p-3">
-            <div class="text-[11px] text-muted-foreground">
-              当前最佳
-            </div>
-            <div class="mt-1 truncate text-sm font-bold" :title="bestNode?.name">
-              {{ bestNode?.name ?? '样本不足' }}
-            </div>
-          </div>
-          <div class="min-w-0 rounded-md bg-background/70 p-3">
-            <div class="text-[11px] text-muted-foreground">
-              最佳评分
-            </div>
-            <div class="mt-1 text-xl font-bold tabular-nums text-emerald-700 dark:text-emerald-400">
-              {{ bestNode ? scoreText(bestNode) : '--' }}
-            </div>
-          </div>
-          <div class="min-w-0 rounded-md bg-background/70 p-3">
-            <div class="text-[11px] text-muted-foreground">
-              零丢包节点
-            </div>
-            <div class="mt-1 text-xl font-bold tabular-nums">
-              {{ lossFreeNodeCount }}
-            </div>
-          </div>
-        </div>
-
-        <div v-if="!selectedTask.ranking_available" class="rounded-md border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">
-          当前有效节点少于 3 个，只展示原始指标，不生成名次和评分结论。
-        </div>
-
-        <Tabs v-model="mobileSection" class="md:hidden">
-          <TabsList class="grid h-9 w-full grid-cols-4">
-            <TabsTrigger value="ranking" class="text-xs">
-              排名
-            </TabsTrigger>
-            <TabsTrigger value="distribution" class="text-xs">
-              分布
-            </TabsTrigger>
-            <TabsTrigger value="trend" class="text-xs">
-              趋势
-            </TabsTrigger>
-            <TabsTrigger value="details" class="text-xs">
-              明细
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
-
-        <div class="grid min-w-0 gap-4 md:grid-cols-2">
-          <section
-            class="min-w-0 flex-col rounded-md bg-background/70 p-3 md:flex"
-            :class="mobileSection === 'ranking' ? 'flex' : 'hidden'"
-          >
-            <div class="mb-3 flex items-center justify-between gap-2">
-              <h2 class="text-sm font-semibold">
-                节点排名
-              </h2>
-              <span class="text-[11px] text-muted-foreground">分数仅限当前任务内比较</span>
-            </div>
-            <div class="space-y-2">
-              <div
-                v-for="node in sortedNodes" :key="node.uuid"
-                class="grid min-h-14 grid-cols-[34px_minmax(0,1fr)_auto] items-center gap-2 rounded-md border border-border/70 px-2.5 py-2"
-              >
-                <div class="text-center text-sm font-bold tabular-nums" :class="node.rank !== null ? 'text-emerald-700 dark:text-emerald-400' : 'text-muted-foreground'">
-                  {{ node.rank ?? '–' }}
+        <div class="space-y-4">
+          <div class="grid gap-2 md:grid-cols-2 md:gap-4">
+            <div class="grid grid-cols-2 gap-2">
+              <div class="min-w-0 rounded-md bg-background/70 p-3">
+                <div class="text-[11px] text-muted-foreground">
+                  有效节点
                 </div>
-                <div class="min-w-0">
-                  <div class="flex min-w-0 items-center gap-1.5">
-                    <span
-                      v-if="nodeOnline(node.uuid) !== null"
-                      class="size-1.5 shrink-0 rounded-full"
-                      :class="nodeOnline(node.uuid) ? 'bg-emerald-500' : 'bg-red-500'"
-                    />
-                    <span class="truncate text-sm font-medium" :title="node.name">{{ node.name }}</span>
-                  </div>
-                  <div class="mt-1 flex flex-wrap gap-x-2 text-[11px] text-muted-foreground">
-                    <span>P50 {{ node.p50 === null ? '--' : `${Math.round(node.p50)}ms` }}</span>
-                    <span>P95 {{ node.p95 === null ? '--' : `${Math.round(node.p95)}ms` }}</span>
-                    <span>丢包 {{ nodeLossText(node) }}</span>
-                  </div>
+                <div class="mt-1 text-xl font-bold tabular-nums">
+                  {{ selectedTask.rankable_node_count }}<span class="ml-1 text-xs font-normal text-muted-foreground">/ {{ selectedTask.node_count }}</span>
                 </div>
-                <div class="text-right">
-                  <div class="text-base font-bold tabular-nums">
-                    {{ scoreText(node) }}
-                  </div>
-                  <span class="mt-0.5 inline-block rounded px-1.5 py-0.5 text-[10px]" :class="gradeClass(node.grade)">
-                    {{ node.grade }}
-                  </span>
+              </div>
+              <div class="min-w-0 rounded-md bg-background/70 p-3">
+                <div class="text-[11px] text-muted-foreground">
+                  当前最佳
+                </div>
+                <div class="mt-1 truncate text-sm font-bold" :title="bestNode?.name">
+                  {{ bestNode?.name ?? '样本不足' }}
                 </div>
               </div>
             </div>
-          </section>
+            <div class="grid grid-cols-2 gap-2">
+              <div class="min-w-0 rounded-md bg-background/70 p-3">
+                <div class="text-[11px] text-muted-foreground">
+                  最佳评分
+                </div>
+                <div class="mt-1 text-xl font-bold tabular-nums text-emerald-700 dark:text-emerald-400">
+                  {{ bestNode ? scoreText(bestNode) : '--' }}
+                </div>
+              </div>
+              <div class="min-w-0 rounded-md bg-background/70 p-3">
+                <div class="text-[11px] text-muted-foreground">
+                  零丢包节点
+                </div>
+                <div class="mt-1 text-xl font-bold tabular-nums">
+                  {{ lossFreeNodeCount }}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="!selectedTask.ranking_available" class="rounded-md border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">
+            当前有效节点少于 3 个，只展示原始指标，不生成名次和评分结论。
+          </div>
+
+          <Tabs v-model="mobileSection" class="md:hidden">
+            <TabsList class="grid h-9 w-full grid-cols-4">
+              <TabsTrigger value="ranking" class="text-xs">
+                排名
+              </TabsTrigger>
+              <TabsTrigger value="distribution" class="text-xs">
+                分布
+              </TabsTrigger>
+              <TabsTrigger value="trend" class="text-xs">
+                趋势
+              </TabsTrigger>
+              <TabsTrigger value="details" class="text-xs">
+                明细
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+
+          <div class="grid min-w-0 gap-4 md:grid-cols-2 md:items-start">
+            <section
+              class="min-w-0 flex-col rounded-md bg-background/70 p-3 md:flex"
+              :class="mobileSection === 'ranking' ? 'flex' : 'hidden'"
+            >
+              <div class="mb-3 flex items-center justify-between gap-2">
+                <h2 class="text-sm font-semibold">
+                  节点排名
+                </h2>
+                <span class="text-[11px] text-muted-foreground">分数仅限当前任务内比较</span>
+              </div>
+              <div class="space-y-2">
+                <div
+                  v-for="node in sortedNodes" :key="node.uuid"
+                  class="grid min-h-14 grid-cols-[34px_minmax(0,1fr)_auto] items-center gap-2 rounded-md border border-border/70 px-2.5 py-2"
+                >
+                  <div class="text-center text-sm font-bold tabular-nums" :class="node.rank !== null ? 'text-emerald-700 dark:text-emerald-400' : 'text-muted-foreground'">
+                    {{ node.rank ?? '–' }}
+                  </div>
+                  <div class="min-w-0">
+                    <div class="flex min-w-0 items-center gap-1.5">
+                      <span
+                        v-if="nodeOnline(node.uuid) !== null"
+                        class="size-1.5 shrink-0 rounded-full"
+                        :class="nodeOnline(node.uuid) ? 'bg-emerald-500' : 'bg-red-500'"
+                      />
+                      <span class="truncate text-sm font-medium" :title="node.name">{{ node.name }}</span>
+                    </div>
+                    <div class="mt-1 flex flex-wrap gap-x-2 text-[11px] text-muted-foreground">
+                      <span>P50 {{ node.p50 === null ? '--' : `${Math.round(node.p50)}ms` }}</span>
+                      <span>P95 {{ node.p95 === null ? '--' : `${Math.round(node.p95)}ms` }}</span>
+                      <span>丢包 {{ nodeLossText(node) }}</span>
+                    </div>
+                  </div>
+                  <div class="text-right">
+                    <div class="text-base font-bold tabular-nums">
+                      {{ scoreText(node) }}
+                    </div>
+                    <span class="mt-0.5 inline-block rounded px-1.5 py-0.5 text-[10px]" :class="gradeClass(node.grade)">
+                      {{ node.grade }}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <div class="min-w-0 space-y-4">
+              <section
+                class="min-w-0 flex-col rounded-md bg-background/70 p-3 md:flex"
+                :class="mobileSection === 'distribution' ? 'flex' : 'hidden'"
+              >
+                <div>
+                  <h2 class="text-sm font-semibold">
+                    P50-P95 延迟区间
+                  </h2>
+                  <p class="mt-1 text-[11px] text-muted-foreground">
+                    实心点为 P50，环形点为 P95；连线越短且整体越靠左越稳定。
+                  </p>
+                </div>
+                <div class="mt-2 h-76 min-w-0">
+                  <VChart v-if="isDesktop || mobileSection === 'distribution'" :option="rangeChartOption" autoresize />
+                </div>
+              </section>
+
+              <section
+                class="min-w-0 flex-col rounded-md bg-background/70 p-3 md:flex"
+                :class="mobileSection === 'distribution' ? 'flex' : 'hidden'"
+              >
+                <div>
+                  <h2 class="text-sm font-semibold">
+                    延迟 / 丢包分布
+                  </h2>
+                  <p class="mt-1 text-[11px] text-muted-foreground">
+                    越靠左下角，典型延迟和丢包越低；悬停或轻触彩球查看节点与公开备注。
+                  </p>
+                </div>
+                <div class="mt-2 h-76 min-w-0">
+                  <VChart v-if="isDesktop || mobileSection === 'distribution'" :option="scatterChartOption" autoresize />
+                </div>
+              </section>
+            </div>
+          </div>
 
           <section
             class="min-w-0 flex-col rounded-md bg-background/70 p-3 md:flex"
-            :class="mobileSection === 'distribution' ? 'flex' : 'hidden'"
-          >
-            <div>
-              <h2 class="text-sm font-semibold">
-                P50-P95 延迟区间
-              </h2>
-              <p class="mt-1 text-[11px] text-muted-foreground">
-                条形左端为 P50，右端为 P95；越短且越靠左越稳定。
-              </p>
-            </div>
-            <div class="mt-2 h-76 min-w-0">
-              <VChart v-if="isDesktop || mobileSection === 'distribution'" :option="rangeChartOption" autoresize />
-            </div>
-          </section>
-
-          <section
-            class="min-w-0 flex-col rounded-md bg-background/70 p-3 md:flex"
-            :class="mobileSection === 'distribution' ? 'flex' : 'hidden'"
-          >
-            <div>
-              <h2 class="text-sm font-semibold">
-                延迟 / 丢包分布
-              </h2>
-              <p class="mt-1 text-[11px] text-muted-foreground">
-                越靠左下角，典型延迟和丢包越低。
-              </p>
-            </div>
-            <div class="mt-2 h-76 min-w-0">
-              <VChart v-if="isDesktop || mobileSection === 'distribution'" :option="scatterChartOption" autoresize />
-            </div>
-          </section>
-
-          <section
-            class="min-w-0 flex-col rounded-md bg-background/70 p-3 md:col-span-2 md:flex"
             :class="mobileSection === 'trend' ? 'flex' : 'hidden'"
           >
             <div class="flex flex-wrap items-center gap-2">
@@ -642,7 +706,7 @@ onMounted(() => {
           </section>
 
           <section
-            class="min-w-0 flex-col rounded-md bg-background/70 p-3 md:col-span-2 md:flex"
+            class="min-w-0 flex-col rounded-md bg-background/70 p-3 md:flex"
             :class="mobileSection === 'details' ? 'flex' : 'hidden'"
           >
             <div class="mb-3">
@@ -732,7 +796,7 @@ onMounted(() => {
             评分怎么理解
           </h2>
           <p class="mt-1">
-            “同任务网络质量对比指数”由丢包、P50、P95、波动和数据覆盖率组成。延迟与波动采用当前任务内的稳健相对比较，丢包使用固定惩罚；不同目标、不同运营商或不同协议之间的分数不能直接横向比较。
+            “同任务网络质量对比指数”由丢包、P50、P95、波动和数据覆盖率组成。延迟采用当前任务内的稳健相对比较，波动按固定比例尺度评分，丢包使用固定惩罚；不同目标、不同运营商或不同协议之间的分数不能直接横向比较。
           </p>
           <p class="mt-1">
             当前权重：丢包 {{ windowData?.scoring.weights.loss }}%、P50 {{ windowData?.scoring.weights.p50 }}%、P95 {{ windowData?.scoring.weights.p95 }}%、波动 {{ windowData?.scoring.weights.volatility }}%、覆盖率 {{ windowData?.scoring.weights.coverage }}%。

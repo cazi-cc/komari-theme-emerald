@@ -16,6 +16,14 @@ and obtains metric aggregates through Komari's public JSON-RPC API.
 The generated files belong in `/var/lib/emerald-analytics` and should be
 exposed read-only at `/emerald-analytics/` by the existing reverse proxy.
 
+## Scoring model
+
+Model v2 uses default weights of `40 / 30 / 25 / 3 / 2` for loss, P50, P95,
+volatility, and coverage. Volatility is scored against fixed P95/P50 spread
+breakpoints instead of relative task percentiles. Theme settings without a
+model version are migrated to these defaults; saved model-v2 custom values are
+preserved.
+
 ## Manual verification
 
 ```bash

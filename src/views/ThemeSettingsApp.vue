@@ -48,7 +48,7 @@ const scoreWeightItems: Array<{ key: ScoreWeightKey, label: string, description:
   { key: 'networkScoreLossWeight', label: '丢包', description: '偶发或持续丢包的固定惩罚' },
   { key: 'networkScoreP50Weight', label: 'P50 延迟', description: '多数请求的典型延迟' },
   { key: 'networkScoreP95Weight', label: 'P95 延迟', description: '较慢请求的尾部延迟' },
-  { key: 'networkScoreVolatilityWeight', label: '波动', description: 'P95 与 P50 的相对差值' },
+  { key: 'networkScoreVolatilityWeight', label: '波动', description: '按固定尺度评估 P95 相对 P50 的增幅' },
   { key: 'networkScoreCoverageWeight', label: '覆盖率', description: '实际样本数与预期样本数之比' },
 ]
 const taskColorPalette = ['#FF6B6B', '#4ECDC4', '#A78BFA', '#60A5FA', '#FFB347', '#F472B6', '#34D399', '#FB923C']
@@ -425,7 +425,7 @@ onMounted(loadSettings)
                 线路对比与评分
               </h2>
               <p class="mt-1 text-sm text-muted-foreground">
-                评分只用于同一个延迟监测任务下的节点横向比较，不代表节点的绝对网络质量。
+                评分模型 v2 以延迟和丢包为主，波动率使用固定尺度，避免放大组内很小的差异。
               </p>
             </header>
 
@@ -457,7 +457,7 @@ onMounted(loadSettings)
                     指标权重
                   </h3>
                   <p class="mt-1 text-xs text-muted-foreground">
-                    服务端会按当前比例归一化后计算。
+                    服务端会按当前比例归一化后计算；默认推荐值为 40 / 30 / 25 / 3 / 2。
                   </p>
                 </div>
                 <span

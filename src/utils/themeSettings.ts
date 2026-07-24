@@ -1,5 +1,6 @@
 export const THEME_SHORT = 'Emerald-Cazi'
 export const MAX_HOME_PING_TASKS = 8
+export const NETWORK_SCORE_MODEL_VERSION = 2
 
 export type PingChartLayout = 'combined' | 'split'
 
@@ -44,6 +45,7 @@ export interface ThemeSettings {
   pingLossWarning: number
   pingLossCritical: number
   networkCompareDefaultHours: number
+  networkScoreModelVersion: number
   networkScoreLossWeight: number
   networkScoreP50Weight: number
   networkScoreP95Weight: number
@@ -97,16 +99,17 @@ export const DEFAULT_THEME_SETTINGS: ThemeSettings = {
   pingLossWarning: 3,
   pingLossCritical: 10,
   networkCompareDefaultHours: 24,
+  networkScoreModelVersion: NETWORK_SCORE_MODEL_VERSION,
   networkScoreLossWeight: 40,
-  networkScoreP50Weight: 25,
-  networkScoreP95Weight: 20,
-  networkScoreVolatilityWeight: 10,
-  networkScoreCoverageWeight: 5,
+  networkScoreP50Weight: 30,
+  networkScoreP95Weight: 25,
+  networkScoreVolatilityWeight: 3,
+  networkScoreCoverageWeight: 2,
   networkScoreMinSamples: 30,
   networkScoreMinCoverage: 20,
-  networkScoreExcellentThreshold: 85,
-  networkScoreGoodThreshold: 70,
-  networkScoreFairThreshold: 55,
+  networkScoreExcellentThreshold: 95,
+  networkScoreGoodThreshold: 85,
+  networkScoreFairThreshold: 70,
 }
 
 const HEX_COLOR_RE = /^#[0-9a-f]{6}$/i
@@ -178,12 +181,14 @@ function readColorMap(value: unknown): Record<string, string> {
 
 export function normalizeThemeSettings(value: unknown): ThemeSettings {
   const source = readObject(value)
+  const usesCurrentScoreModel = source.networkScoreModelVersion === NETWORK_SCORE_MODEL_VERSION
+  const scoreSource = usesCurrentScoreModel ? source : {}
   const defaultHours = typeof source.pingChartDefaultHours === 'number' && VALID_CHART_HOURS.has(source.pingChartDefaultHours)
     ? source.pingChartDefaultHours
     : DEFAULT_THEME_SETTINGS.pingChartDefaultHours
-  const fairThreshold = clampNumber(source.networkScoreFairThreshold, DEFAULT_THEME_SETTINGS.networkScoreFairThreshold, 0, 100)
-  const goodThreshold = Math.max(fairThreshold, clampNumber(source.networkScoreGoodThreshold, DEFAULT_THEME_SETTINGS.networkScoreGoodThreshold, 0, 100))
-  const excellentThreshold = Math.max(goodThreshold, clampNumber(source.networkScoreExcellentThreshold, DEFAULT_THEME_SETTINGS.networkScoreExcellentThreshold, 0, 100))
+  const fairThreshold = clampNumber(scoreSource.networkScoreFairThreshold, DEFAULT_THEME_SETTINGS.networkScoreFairThreshold, 0, 100)
+  const goodThreshold = Math.max(fairThreshold, clampNumber(scoreSource.networkScoreGoodThreshold, DEFAULT_THEME_SETTINGS.networkScoreGoodThreshold, 0, 100))
+  const excellentThreshold = Math.max(goodThreshold, clampNumber(scoreSource.networkScoreExcellentThreshold, DEFAULT_THEME_SETTINGS.networkScoreExcellentThreshold, 0, 100))
 
   return {
     dataUpdateInterval: clampNumber(source.dataUpdateInterval, DEFAULT_THEME_SETTINGS.dataUpdateInterval, 1, 60),
@@ -235,11 +240,12 @@ export function normalizeThemeSettings(value: unknown): ThemeSettings {
     networkCompareDefaultHours: typeof source.networkCompareDefaultHours === 'number' && VALID_CHART_HOURS.has(source.networkCompareDefaultHours)
       ? source.networkCompareDefaultHours
       : DEFAULT_THEME_SETTINGS.networkCompareDefaultHours,
-    networkScoreLossWeight: clampNumber(source.networkScoreLossWeight, DEFAULT_THEME_SETTINGS.networkScoreLossWeight, 0, 100),
-    networkScoreP50Weight: clampNumber(source.networkScoreP50Weight, DEFAULT_THEME_SETTINGS.networkScoreP50Weight, 0, 100),
-    networkScoreP95Weight: clampNumber(source.networkScoreP95Weight, DEFAULT_THEME_SETTINGS.networkScoreP95Weight, 0, 100),
-    networkScoreVolatilityWeight: clampNumber(source.networkScoreVolatilityWeight, DEFAULT_THEME_SETTINGS.networkScoreVolatilityWeight, 0, 100),
-    networkScoreCoverageWeight: clampNumber(source.networkScoreCoverageWeight, DEFAULT_THEME_SETTINGS.networkScoreCoverageWeight, 0, 100),
+    networkScoreModelVersion: NETWORK_SCORE_MODEL_VERSION,
+    networkScoreLossWeight: clampNumber(scoreSource.networkScoreLossWeight, DEFAULT_THEME_SETTINGS.networkScoreLossWeight, 0, 100),
+    networkScoreP50Weight: clampNumber(scoreSource.networkScoreP50Weight, DEFAULT_THEME_SETTINGS.networkScoreP50Weight, 0, 100),
+    networkScoreP95Weight: clampNumber(scoreSource.networkScoreP95Weight, DEFAULT_THEME_SETTINGS.networkScoreP95Weight, 0, 100),
+    networkScoreVolatilityWeight: clampNumber(scoreSource.networkScoreVolatilityWeight, DEFAULT_THEME_SETTINGS.networkScoreVolatilityWeight, 0, 100),
+    networkScoreCoverageWeight: clampNumber(scoreSource.networkScoreCoverageWeight, DEFAULT_THEME_SETTINGS.networkScoreCoverageWeight, 0, 100),
     networkScoreMinSamples: Math.round(clampNumber(source.networkScoreMinSamples, DEFAULT_THEME_SETTINGS.networkScoreMinSamples, 1, 100000)),
     networkScoreMinCoverage: clampNumber(source.networkScoreMinCoverage, DEFAULT_THEME_SETTINGS.networkScoreMinCoverage, 0, 100),
     networkScoreExcellentThreshold: excellentThreshold,

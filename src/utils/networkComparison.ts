@@ -51,6 +51,8 @@ export interface NetworkComparisonWindow {
   hours: number
   scoring: {
     name: string
+    model_version?: number
+    volatility_scale?: string
     weights: NetworkScoreComponents
     minimum_samples: number
     minimum_coverage_percent: number
