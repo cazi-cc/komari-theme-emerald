@@ -17,6 +17,11 @@ const siteFavicon = ref('/favicon.ico')
 const actionButtons = computed(() => {
   const buttons = [
     {
+      title: '线路对比',
+      icon: 'lucide:route',
+      action: 'networkComparison',
+    },
+    {
       title: appStore.themeMode === 'auto' ? '自动主题' : appStore.themeMode === 'light' ? '浅色主题' : '深色主题',
       icon: appStore.themeMode === 'auto' ? 'icon-park-outline:dark-mode' : appStore.themeMode === 'light' ? 'icon-park-outline:sun-one' : 'icon-park-outline:moon',
       action: 'toggleTheme',
@@ -37,6 +42,9 @@ function handleButtonClick(action: string) {
   switch (action) {
     case 'toggleTheme':
       appStore.updateThemeMode()
+      break
+    case 'networkComparison':
+      router.push({ name: 'network-comparison' })
       break
     case 'jumpToSetting':
       location.href = '/admin'
@@ -64,7 +72,7 @@ const sitename = computed(() => appStore.publicSettings?.sitename || 'Komari Mon
       </div>
       <div class="flex items-center gap-2">
         <DataTooltip v-for="button in actionButtons" :key="button.action" :content="button.title" placement="left" content-class="whitespace-nowrap text-[11px] px-2">
-          <Button variant="ghost" size="icon-sm" @click="handleButtonClick(button.action)">
+          <Button variant="ghost" size="icon-sm" :aria-label="button.title" @click="handleButtonClick(button.action)">
             <Icon :icon="button.icon" :width="18" :height="18" />
           </Button>
         </DataTooltip>

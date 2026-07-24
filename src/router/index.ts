@@ -13,6 +13,11 @@ const router = createRouter({
       name: 'instance-detail',
       component: () => import('@/views/InstanceDetail.vue'),
     },
+    {
+      path: '/network-comparison',
+      name: 'network-comparison',
+      component: () => import('@/views/NetworkComparison.vue'),
+    },
   ],
 })
 

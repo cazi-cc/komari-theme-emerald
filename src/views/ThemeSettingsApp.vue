@@ -24,11 +24,13 @@ interface AdminPingTask {
   default_on?: boolean
 }
 
-type SettingsSection = 'home-ping' | 'chart' | 'appearance' | 'notice' | 'background' | 'filing'
+type SettingsSection = 'home-ping' | 'comparison' | 'chart' | 'appearance' | 'notice' | 'background' | 'filing'
 type StatusColorKey = 'pingExcellentColor' | 'pingGoodColor' | 'pingModerateColor' | 'pingWarningColor' | 'pingCriticalColor'
+type ScoreWeightKey = 'networkScoreLossWeight' | 'networkScoreP50Weight' | 'networkScoreP95Weight' | 'networkScoreVolatilityWeight' | 'networkScoreCoverageWeight'
 
 const sections: Array<{ key: SettingsSection, label: string, icon: string }> = [
   { key: 'home-ping', label: '首页延迟任务', icon: 'lucide:list-ordered' },
+  { key: 'comparison', label: '线路对比', icon: 'lucide:route' },
   { key: 'chart', label: '详情图表', icon: 'lucide:chart-no-axes-combined' },
   { key: 'appearance', label: '页面与显示', icon: 'lucide:layout-dashboard' },
   { key: 'notice', label: '公告', icon: 'lucide:megaphone' },
@@ -42,6 +44,13 @@ const statusColorItems: Array<{ key: StatusColorKey, label: string }> = [
   { key: 'pingWarningColor', label: '警告' },
   { key: 'pingCriticalColor', label: '严重' },
 ]
+const scoreWeightItems: Array<{ key: ScoreWeightKey, label: string, description: string }> = [
+  { key: 'networkScoreLossWeight', label: '丢包', description: '偶发或持续丢包的固定惩罚' },
+  { key: 'networkScoreP50Weight', label: 'P50 延迟', description: '多数请求的典型延迟' },
+  { key: 'networkScoreP95Weight', label: 'P95 延迟', description: '较慢请求的尾部延迟' },
+  { key: 'networkScoreVolatilityWeight', label: '波动', description: 'P95 与 P50 的相对差值' },
+  { key: 'networkScoreCoverageWeight', label: '覆盖率', description: '实际样本数与预期样本数之比' },
+]
 const taskColorPalette = ['#FF6B6B', '#4ECDC4', '#A78BFA', '#60A5FA', '#FFB347', '#F472B6', '#34D399', '#FB923C']
 
 const activeSection = ref<SettingsSection>('home-ping')
@@ -53,6 +62,8 @@ const nodes = ref<AdminNode[]>([])
 const tasks = ref<AdminPingTask[]>([])
 const draggedTask = ref<{ uuid: string, taskId: number } | null>(null)
 const settings = reactive<ThemeSettings>({ ...DEFAULT_THEME_SETTINGS })
+const buildVersion = __BUILD_VERSION__
+const buildGitHash = __BUILD_GIT_HASH__
 
 const taskMap = computed(() => new Map(tasks.value.map(task => [task.id, task])))
 const sortedNodes = computed(() => [...nodes.value].sort((left, right) => left.name.localeCompare(right.name, 'zh-CN')))
@@ -60,6 +71,7 @@ const maximumSelectedTaskCount = computed(() => Math.max(
   1,
   ...Object.values(settings.homePingTasksByNode).map(taskIds => taskIds.length),
 ))
+const scoreWeightTotal = computed(() => scoreWeightItems.reduce((total, item) => total + settings[item.key], 0))
 
 function unwrapData<T>(value: unknown): T {
   if (value && typeof value === 'object' && !Array.isArray(value) && 'data' in value)
@@ -245,6 +257,9 @@ onMounted(loadSettings)
           <p class="mt-1 text-xs text-muted-foreground">
             首页任务、详情图表与主题外观
           </p>
+          <p class="mt-1 text-[11px] text-muted-foreground">
+            v{{ buildVersion }} · {{ buildGitHash }}
+          </p>
         </div>
         <nav class="flex gap-1 overflow-x-auto pb-1 lg:flex-col">
           <button
@@ -319,8 +334,10 @@ onMounted(loadSettings)
                 v-model.number="settings.homePingRowCount" type="range" min="1" :max="MAX_HOME_PING_TASKS" step="1"
                 class="mt-4 h-2 w-full cursor-pointer accent-emerald-600" aria-label="调整首页卡片统一行数"
               >
-              <div class="mt-2 grid grid-cols-8 text-center text-[11px] text-muted-foreground">
-                <span v-for="row in MAX_HOME_PING_TASKS" :key="row">{{ row }}</span>
+              <div class="mt-2 px-2 text-[11px] text-muted-foreground">
+                <div class="flex justify-between">
+                  <span v-for="row in MAX_HOME_PING_TASKS" :key="row" class="flex w-0 justify-center">{{ row }}</span>
+                </div>
               </div>
             </div>
 
@@ -399,6 +416,84 @@ onMounted(loadSettings)
                   <span class="min-w-0 truncate" :title="taskLabel(task)">{{ taskLabel(task) }}</span>
                 </label>
               </div>
+            </div>
+          </template>
+
+          <template v-else-if="activeSection === 'comparison'">
+            <header>
+              <h2 class="text-base font-semibold">
+                线路对比与评分
+              </h2>
+              <p class="mt-1 text-sm text-muted-foreground">
+                评分只用于同一个延迟监测任务下的节点横向比较，不代表节点的绝对网络质量。
+              </p>
+            </header>
+
+            <div class="grid gap-4 rounded-md border border-border bg-card p-4 sm:grid-cols-2">
+              <label class="space-y-1 text-sm">
+                <span>默认时间范围</span>
+                <select v-model.number="settings.networkCompareDefaultHours" class="h-9 w-full rounded-md border border-border bg-background px-3">
+                  <option :value="1">1 小时</option><option :value="6">6 小时</option><option :value="12">12 小时</option>
+                  <option :value="24">1 天</option><option :value="72">3 天</option><option :value="168">7 天</option>
+                </select>
+              </label>
+              <label class="space-y-1 text-sm">
+                <span>最低样本数</span>
+                <input v-model.number="settings.networkScoreMinSamples" type="number" min="1" max="100000" class="h-9 w-full rounded-md border border-border bg-background px-3">
+              </label>
+              <label class="space-y-1 text-sm">
+                <span>最低数据覆盖率（%）</span>
+                <input v-model.number="settings.networkScoreMinCoverage" type="number" min="0" max="100" step="1" class="h-9 w-full rounded-md border border-border bg-background px-3">
+              </label>
+              <div class="rounded-md bg-muted/60 px-3 py-2 text-xs text-muted-foreground">
+                少于 3 个有效节点时仍展示指标，但不生成排名，避免样本过少造成误导。
+              </div>
+            </div>
+
+            <div class="rounded-md border border-border bg-card p-4">
+              <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h3 class="text-sm font-semibold">
+                    指标权重
+                  </h3>
+                  <p class="mt-1 text-xs text-muted-foreground">
+                    服务端会按当前比例归一化后计算。
+                  </p>
+                </div>
+                <span
+                  class="rounded px-2 py-1 text-xs font-semibold tabular-nums"
+                  :class="scoreWeightTotal === 100 ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400' : 'bg-amber-500/10 text-amber-700 dark:text-amber-400'"
+                >
+                  合计 {{ scoreWeightTotal }}%
+                </span>
+              </div>
+              <div class="grid gap-3 sm:grid-cols-2">
+                <label v-for="item in scoreWeightItems" :key="item.key" class="grid grid-cols-[minmax(0,1fr)_76px] items-center gap-3 rounded-md border border-border/70 bg-background px-3 py-2">
+                  <span class="min-w-0">
+                    <span class="block text-sm font-medium">{{ item.label }}</span>
+                    <span class="mt-0.5 block text-[11px] text-muted-foreground">{{ item.description }}</span>
+                  </span>
+                  <span class="relative">
+                    <input v-model.number="settings[item.key]" type="number" min="0" max="100" step="1" class="h-8 w-full rounded-md border border-border bg-background px-2 pr-6 text-right text-sm tabular-nums">
+                    <span class="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">%</span>
+                  </span>
+                </label>
+              </div>
+            </div>
+
+            <div class="rounded-md border border-border bg-card p-4">
+              <h3 class="mb-3 text-sm font-semibold">
+                评级阈值
+              </h3>
+              <div class="grid gap-3 sm:grid-cols-3">
+                <label class="space-y-1 text-sm"><span>优秀起始分</span><input v-model.number="settings.networkScoreExcellentThreshold" type="number" min="0" max="100" class="h-9 w-full rounded-md border border-border bg-background px-3"></label>
+                <label class="space-y-1 text-sm"><span>良好起始分</span><input v-model.number="settings.networkScoreGoodThreshold" type="number" min="0" max="100" class="h-9 w-full rounded-md border border-border bg-background px-3"></label>
+                <label class="space-y-1 text-sm"><span>一般起始分</span><input v-model.number="settings.networkScoreFairThreshold" type="number" min="0" max="100" class="h-9 w-full rounded-md border border-border bg-background px-3"></label>
+              </div>
+            </div>
+
+            <div class="rounded-md border border-border bg-card p-4 text-xs leading-6 text-muted-foreground">
+              排名数据由服务器后台定期计算并缓存。1 小时每 5 分钟更新，6 小时、12 小时和 1 天每 10 分钟更新，3 天和 7 天每 30 分钟更新；访客打开页面只读取缓存，不会重复执行全量统计。
             </div>
           </template>
 

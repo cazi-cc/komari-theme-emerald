@@ -43,6 +43,17 @@ export interface ThemeSettings {
   pingLatencyCritical: number
   pingLossWarning: number
   pingLossCritical: number
+  networkCompareDefaultHours: number
+  networkScoreLossWeight: number
+  networkScoreP50Weight: number
+  networkScoreP95Weight: number
+  networkScoreVolatilityWeight: number
+  networkScoreCoverageWeight: number
+  networkScoreMinSamples: number
+  networkScoreMinCoverage: number
+  networkScoreExcellentThreshold: number
+  networkScoreGoodThreshold: number
+  networkScoreFairThreshold: number
 }
 
 export const DEFAULT_THEME_SETTINGS: ThemeSettings = {
@@ -85,6 +96,17 @@ export const DEFAULT_THEME_SETTINGS: ThemeSettings = {
   pingLatencyCritical: 300,
   pingLossWarning: 3,
   pingLossCritical: 10,
+  networkCompareDefaultHours: 24,
+  networkScoreLossWeight: 40,
+  networkScoreP50Weight: 25,
+  networkScoreP95Weight: 20,
+  networkScoreVolatilityWeight: 10,
+  networkScoreCoverageWeight: 5,
+  networkScoreMinSamples: 30,
+  networkScoreMinCoverage: 20,
+  networkScoreExcellentThreshold: 85,
+  networkScoreGoodThreshold: 70,
+  networkScoreFairThreshold: 55,
 }
 
 const HEX_COLOR_RE = /^#[0-9a-f]{6}$/i
@@ -159,6 +181,9 @@ export function normalizeThemeSettings(value: unknown): ThemeSettings {
   const defaultHours = typeof source.pingChartDefaultHours === 'number' && VALID_CHART_HOURS.has(source.pingChartDefaultHours)
     ? source.pingChartDefaultHours
     : DEFAULT_THEME_SETTINGS.pingChartDefaultHours
+  const fairThreshold = clampNumber(source.networkScoreFairThreshold, DEFAULT_THEME_SETTINGS.networkScoreFairThreshold, 0, 100)
+  const goodThreshold = Math.max(fairThreshold, clampNumber(source.networkScoreGoodThreshold, DEFAULT_THEME_SETTINGS.networkScoreGoodThreshold, 0, 100))
+  const excellentThreshold = Math.max(goodThreshold, clampNumber(source.networkScoreExcellentThreshold, DEFAULT_THEME_SETTINGS.networkScoreExcellentThreshold, 0, 100))
 
   return {
     dataUpdateInterval: clampNumber(source.dataUpdateInterval, DEFAULT_THEME_SETTINGS.dataUpdateInterval, 1, 60),
@@ -207,5 +232,18 @@ export function normalizeThemeSettings(value: unknown): ThemeSettings {
     pingLatencyCritical: clampNumber(source.pingLatencyCritical, DEFAULT_THEME_SETTINGS.pingLatencyCritical, 1, 5000),
     pingLossWarning: clampNumber(source.pingLossWarning, DEFAULT_THEME_SETTINGS.pingLossWarning, 0, 100),
     pingLossCritical: clampNumber(source.pingLossCritical, DEFAULT_THEME_SETTINGS.pingLossCritical, 0, 100),
+    networkCompareDefaultHours: typeof source.networkCompareDefaultHours === 'number' && VALID_CHART_HOURS.has(source.networkCompareDefaultHours)
+      ? source.networkCompareDefaultHours
+      : DEFAULT_THEME_SETTINGS.networkCompareDefaultHours,
+    networkScoreLossWeight: clampNumber(source.networkScoreLossWeight, DEFAULT_THEME_SETTINGS.networkScoreLossWeight, 0, 100),
+    networkScoreP50Weight: clampNumber(source.networkScoreP50Weight, DEFAULT_THEME_SETTINGS.networkScoreP50Weight, 0, 100),
+    networkScoreP95Weight: clampNumber(source.networkScoreP95Weight, DEFAULT_THEME_SETTINGS.networkScoreP95Weight, 0, 100),
+    networkScoreVolatilityWeight: clampNumber(source.networkScoreVolatilityWeight, DEFAULT_THEME_SETTINGS.networkScoreVolatilityWeight, 0, 100),
+    networkScoreCoverageWeight: clampNumber(source.networkScoreCoverageWeight, DEFAULT_THEME_SETTINGS.networkScoreCoverageWeight, 0, 100),
+    networkScoreMinSamples: Math.round(clampNumber(source.networkScoreMinSamples, DEFAULT_THEME_SETTINGS.networkScoreMinSamples, 1, 100000)),
+    networkScoreMinCoverage: clampNumber(source.networkScoreMinCoverage, DEFAULT_THEME_SETTINGS.networkScoreMinCoverage, 0, 100),
+    networkScoreExcellentThreshold: excellentThreshold,
+    networkScoreGoodThreshold: goodThreshold,
+    networkScoreFairThreshold: fairThreshold,
   }
 }

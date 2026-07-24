@@ -1,0 +1,13 @@
+[Unit]
+Description=Refresh Emerald 1-hour analytics cache every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+RandomizedDelaySec=40s
+AccuracySec=5s
+Persistent=true
+Unit=emerald-analytics@fast.service
+
+[Install]
+WantedBy=timers.target

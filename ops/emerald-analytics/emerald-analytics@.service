@@ -1,0 +1,25 @@
+[Unit]
+Description=Emerald task-first network analytics cache (%i)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/komari/emerald-analytics-bin/emerald_analytics.py --group %i
+Nice=15
+IOSchedulingClass=idle
+CPUSchedulingPolicy=batch
+CPUQuota=30%
+MemoryMax=192M
+TimeoutStartSec=4min
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadOnlyPaths=/opt/komari/data /opt/komari/emerald-analytics-bin
+ReadWritePaths=/var/lib/emerald-analytics
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

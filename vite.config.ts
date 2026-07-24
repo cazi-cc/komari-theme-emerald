@@ -121,6 +121,11 @@ export default defineConfig(({ mode }) => {
                 origin: devProxyTarget,
               },
             },
+            '/emerald-analytics': {
+              target: devProxyTarget,
+              changeOrigin: true,
+              secure: true,
+            },
           }
         : undefined,
     },

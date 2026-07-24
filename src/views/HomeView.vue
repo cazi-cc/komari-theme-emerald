@@ -163,6 +163,27 @@ function getNodeItemTransitionStyle(index: number): Record<string, string> {
       </Alert>
     </div>
 
+    <div class="px-4 pb-4">
+      <button
+        type="button"
+        class="group flex w-full items-center gap-3 rounded-md border border-emerald-600/15 bg-background/70 px-3 py-3 text-left shadow-sm transition-colors hover:border-emerald-600/35 hover:bg-background md:px-4"
+        @click="router.push({ name: 'network-comparison' })"
+      >
+        <span class="flex size-9 shrink-0 items-center justify-center rounded-md bg-emerald-600 text-white">
+          <Icon icon="lucide:route" :width="18" :height="18" />
+        </span>
+        <span class="min-w-0 flex-1">
+          <span class="block text-sm font-semibold">线路对比</span>
+          <span class="mt-0.5 block text-xs text-muted-foreground">按延迟监测任务，对比不同节点到同一目标的网络质量</span>
+        </span>
+        <span class="hidden items-center gap-1 text-xs font-medium text-emerald-700 sm:flex dark:text-emerald-400">
+          进入分析
+          <Icon icon="lucide:arrow-right" :width="14" :height="14" class="transition-transform group-hover:translate-x-0.5" />
+        </span>
+        <Icon icon="lucide:chevron-right" :width="17" :height="17" class="shrink-0 text-muted-foreground sm:hidden" />
+      </button>
+    </div>
+
     <NodeGeneralCards
       v-if="appStore.earthViewMode !== 'hide'"
       :nodes="groupNodeList"

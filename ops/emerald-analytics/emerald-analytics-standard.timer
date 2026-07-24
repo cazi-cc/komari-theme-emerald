@@ -1,0 +1,13 @@
+[Unit]
+Description=Refresh Emerald 6-hour to 1-day analytics caches every 10 minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=10min
+RandomizedDelaySec=60s
+AccuracySec=5s
+Persistent=true
+Unit=emerald-analytics@standard.service
+
+[Install]
+WantedBy=timers.target
