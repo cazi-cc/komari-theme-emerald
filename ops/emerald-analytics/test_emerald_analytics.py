@@ -75,6 +75,31 @@ class ScoringModelTests(unittest.TestCase):
             "良好",
         )
 
+    def test_public_window_omits_private_task_target(self):
+        window = analytics.build_window(
+            1,
+            [],
+            [
+                {
+                    "id": 1,
+                    "name": "移动 IPv6",
+                    "target": "private.example.invalid",
+                    "type": "icmp",
+                    "interval": 30,
+                    "clients": [],
+                }
+            ],
+            analytics.scoring_config({}),
+            {
+                "p50": {"series": []},
+                "p95": {"series": []},
+                "loss": {"series": []},
+            },
+        )
+
+        self.assertEqual(window["schema_version"], 3)
+        self.assertNotIn("target", window["tasks"][0])
+
 
 if __name__ == "__main__":
     unittest.main()

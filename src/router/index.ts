@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { recordVisitorPageView } from '@/utils/visitorAudit'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -19,6 +20,11 @@ const router = createRouter({
       component: () => import('@/views/NetworkComparison.vue'),
     },
   ],
+})
+
+router.afterEach((to) => {
+  const route = typeof to.name === 'string' ? to.name : ''
+  void recordVisitorPageView(to.path, route)
 })
 
 export default router

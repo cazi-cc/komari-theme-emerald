@@ -34,7 +34,6 @@ export interface NetworkComparisonNode {
 export interface NetworkComparisonTask {
   id: number
   name: string
-  target: string
   type: string
   interval: number
   node_count: number

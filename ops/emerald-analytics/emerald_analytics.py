@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 SCORE_MODEL_VERSION = 2
 THEME_SHORT = "Emerald-Cazi"
 WINDOW_GROUPS = {
@@ -101,7 +101,7 @@ def load_source_data(connection: sqlite3.Connection) -> tuple[list[dict[str, Any
     client_ids = {client["uuid"] for client in clients}
     tasks = []
     for row in connection.execute(
-        "SELECT id, weight, name, clients, all_clients, type, target, interval "
+        "SELECT id, weight, name, clients, all_clients, type, interval "
         "FROM ping_tasks ORDER BY weight ASC, id ASC"
     ):
         assigned = client_ids if bool(row["all_clients"]) else set(read_json_list(row["clients"])) & client_ids
@@ -110,7 +110,6 @@ def load_source_data(connection: sqlite3.Connection) -> tuple[list[dict[str, Any
                 "id": int(row["id"]),
                 "weight": int(row["weight"]),
                 "name": row["name"] or f"任务 {row['id']}",
-                "target": row["target"] or "",
                 "type": row["type"] or "icmp",
                 "interval": max(1, int(row["interval"] or 60)),
                 "clients": sorted(assigned),
@@ -456,7 +455,6 @@ def build_window(
             {
                 "id": task["id"],
                 "name": task["name"],
-                "target": task["target"],
                 "type": task["type"],
                 "interval": task["interval"],
                 "node_count": len(nodes),

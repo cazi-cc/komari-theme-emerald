@@ -1,8 +1,9 @@
 const DARK_CLASS_NAMES = new Set(['dark', 'dark-mode', 'dark-theme', 'theme-dark'])
 const LIGHT_CLASS_NAMES = new Set(['light', 'light-mode', 'light-theme', 'theme-light'])
-const THEME_ATTRIBUTES = ['data-theme', 'data-color-scheme', 'data-mode']
+const THEME_ATTRIBUTES = ['data-theme', 'data-color-scheme', 'data-mode', 'data-color-theme']
 const COLOR_CHANNEL_RE = /[\d.]+/g
 const OKLCH_LIGHTNESS_RE = /^oklch\(\s*([\d.]+)(%)?/i
+const copiedHostProperties = new Set<string>()
 
 function classTheme(element: Element): boolean | null {
   const classes = [...element.classList]
@@ -82,19 +83,75 @@ function parentDocument(): Document | null {
   }
 }
 
-function applyTheme(dark: boolean): void {
+function hostColorTheme(hostDocument: Document): string {
+  return hostDocument.documentElement.getAttribute('data-color-theme')
+    || hostDocument.body?.getAttribute('data-color-theme')
+    || ''
+}
+
+function copyHostProperties(hostDocument: Document): void {
+  const hostWindow = hostDocument.defaultView
+  if (!hostWindow)
+    return
+
+  const values = new Map<string, string>()
+  const elements = [hostDocument.documentElement, hostDocument.body].filter(Boolean)
+  for (const element of elements) {
+    const style = hostWindow.getComputedStyle(element)
+    for (let index = 0; index < style.length; index++) {
+      const property = style.item(index)
+      if (!property.startsWith('--'))
+        continue
+      const value = style.getPropertyValue(property).trim()
+      if (value)
+        values.set(property, value)
+    }
+  }
+
+  const rootStyle = document.documentElement.style
+  for (const property of copiedHostProperties) {
+    if (!values.has(property))
+      rootStyle.removeProperty(property)
+  }
+  copiedHostProperties.clear()
+
+  for (const [property, value] of values) {
+    rootStyle.setProperty(property, value)
+    copiedHostProperties.add(property)
+  }
+
+  const bodyStyle = hostWindow.getComputedStyle(hostDocument.body || hostDocument.documentElement)
+  if (bodyStyle.fontFamily)
+    rootStyle.setProperty('--font-sans', bodyStyle.fontFamily)
+}
+
+function applyTheme(dark: boolean, hostDocument: Document | null): void {
   const root = document.documentElement
   root.classList.toggle('dark', dark)
+  root.classList.toggle('light', !dark)
   root.style.colorScheme = dark ? 'dark' : 'light'
+
+  if (!hostDocument)
+    return
+
+  const colorTheme = hostColorTheme(hostDocument)
+  if (colorTheme)
+    root.setAttribute('data-color-theme', colorTheme)
+  else
+    root.removeAttribute('data-color-theme')
+  copyHostProperties(hostDocument)
 }
 
 export function startSettingsThemeSync(): () => void {
   const preferredTheme = window.matchMedia('(prefers-color-scheme: dark)')
   const hostDocument = parentDocument()
   const Observer = hostDocument?.defaultView?.MutationObserver ?? MutationObserver
-  const syncTheme = () => applyTheme(
-    hostDocument ? hostTheme(hostDocument, preferredTheme.matches) : preferredTheme.matches,
-  )
+  const syncTheme = () => {
+    const dark = hostDocument
+      ? hostTheme(hostDocument, preferredTheme.matches)
+      : preferredTheme.matches
+    applyTheme(dark, hostDocument)
+  }
   const observer = hostDocument ? new Observer(syncTheme) : null
   const observerOptions: MutationObserverInit = {
     attributes: true,

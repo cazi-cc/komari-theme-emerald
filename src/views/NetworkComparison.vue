@@ -484,7 +484,7 @@ onMounted(() => {
         <span class="text-xs font-medium text-muted-foreground">延迟监测任务</span>
         <select v-model.number="selectedTaskId" class="h-10 w-full rounded-md border border-border bg-background px-3 text-sm font-medium">
           <option v-for="task in windowData?.tasks ?? []" :key="task.id" :value="task.id">
-            {{ task.name }} · {{ task.target }}
+            {{ task.name }}
           </option>
         </select>
       </label>
