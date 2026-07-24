@@ -16,8 +16,8 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
-ReadOnlyPaths=/opt/komari/data /opt/komari/emerald-analytics-bin
-ReadWritePaths=/var/lib/emerald-analytics
+ReadOnlyPaths=/opt/komari/emerald-analytics-bin
+ReadWritePaths=/var/lib/emerald-analytics /opt/komari/data
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 LockPersonality=true
 

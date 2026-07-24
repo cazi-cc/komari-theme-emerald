@@ -15,6 +15,9 @@ and obtains metric aggregates through Komari's public JSON-RPC API.
 
 The generated files belong in `/var/lib/emerald-analytics` and should be
 exposed read-only at `/emerald-analytics/` by the existing reverse proxy.
+The generator opens the main Komari database with SQLite `mode=ro`. Its systemd
+sandbox grants the data directory write access only because WAL readers must be
+able to create and lock SQLite's transient `-shm` coordination file.
 
 ## Scoring model
 
