@@ -1,16 +1,22 @@
-<h3 align="center"> Komari Emerald </h3>
+<h3 align="center"> Komari Emerald Cazi </h3>
 <p align="center">
-基于 Vue 3 + Vite + reka-ui + Tailwind CSS v4 构建的 Komari Monitor 主题
+基于 Komari Emerald 定制的 Komari Monitor 双栈监控主题
 </p>
 
 ![preview](/docs/preview.png)
 
 ## 使用
 
-1. 从 [Release 页面](https://github.com/Tokinx/komari-theme-emerald/releases) 下载最新的 `komari-theme-emerald-build-*.zip` 文件
+1. 从 [Release 页面](https://github.com/cazi-cc/komari-theme-emerald/releases) 下载最新的 `komari-theme-emerald-build-*.zip` 文件
 2. 登录 Komari Monitor 后，点击 `设置`，选择 `主题管理` 选项卡
 3. 点击 `上传主题` 按钮，选择下载的 `komari-theme-emerald-build-*.zip` 文件
 4. 刷新页面，即可看到新的主题
+
+## 定制功能
+
+- 首页节点卡片按 IPv4、IPv6 两行独立显示延迟和丢包，不再合并双栈任务数据
+- 最优延迟和最低丢包使用更醒目的 `#5EEAA6`，下一档使用 `#47B592`
+- 节点名称下方单独显示公开备注
 
 ## 环境要求
 
@@ -59,6 +65,7 @@ bun run preview
 
 ## 鸣谢
 
+- [Komari Emerald](https://github.com/Tokinx/komari-theme-emerald)
 - [Komari](https://github.com/komari-monitor/komari)
 - [Komari Next](https://github.com/tonyliuzj/komari-next)
 - [Komari Naive](https://github.com/lyimoexiao/komari-theme-naive)
@@ -67,7 +74,7 @@ bun run preview
 - [reka-ui](https://reka-ui.com/)
 - [Tailwind CSS](https://tailwindcss.com/)
 
-本主题基座基于 [Komari Naive](https://github.com/lyimoexiao/komari-theme-naive)，特此感谢
+本项目 fork 自 [Tokinx/komari-theme-emerald](https://github.com/Tokinx/komari-theme-emerald)，原主题基座基于 [Komari Naive](https://github.com/lyimoexiao/komari-theme-naive)，特此感谢。
 
 ## License
 

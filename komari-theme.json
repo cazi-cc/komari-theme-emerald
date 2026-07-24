@@ -1,10 +1,10 @@
 {
-  "name": "Komari Emerald",
-  "short": "Emerald",
-  "description": "An emerald theme for Komari",
-  "version": "1.0.2",
-  "author": "Tokinx",
-  "url": "https://github.com/Tokinx/komari-theme-emerald",
+  "name": "Komari Emerald Cazi",
+  "short": "Emerald Cazi",
+  "description": "A dual-stack Komari theme customized for cazi.cc",
+  "version": "1.1.0",
+  "author": "cazi-cc",
+  "url": "https://github.com/cazi-cc/komari-theme-emerald",
   "preview": "preview.png",
   "configuration": {
     "type": "managed",
