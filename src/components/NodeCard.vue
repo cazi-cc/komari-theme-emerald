@@ -37,12 +37,7 @@ const diskPercentage = computed(() => (props.node.disk ?? 0) / (props.node.disk_
 const diskStatus = computed(() => getStatus(diskPercentage.value))
 
 const {
-  latencyRenderBars,
-  lossRenderBars,
-  latencyDisplay,
-  lossDisplay,
-  latencyPanelTooltip,
-  lossPanelTooltip,
+  pingTaskDisplays,
 } = useNodePingDisplay(() => props.node.uuid)
 
 function showTrafficProgress(node: NodeData): boolean {
@@ -135,15 +130,24 @@ function openPingDialog() {
     @click="emit('click')"
   >
     <template #header>
-      <div class="flex gap-2 min-w-0 items-center">
-        <div class="size-2 rounded-full relative" :class="[props.node.online ? 'bg-emerald-600' : 'bg-red-600']">
+      <div class="flex gap-2 min-w-0 items-start">
+        <div class="mt-1.5 size-2 shrink-0 rounded-full relative" :class="[props.node.online ? 'bg-emerald-600' : 'bg-red-600']">
           <div
             class="animate-ping absolute inset-0 rounded-full opacity-50"
             :class="[props.node.online ? 'bg-emerald-600' : 'bg-red-600']"
           />
         </div>
-        <div class="text-md font-bold flex-1 min-w-0 truncate">
-          {{ props.node.name }}
+        <div class="flex-1 min-w-0">
+          <div class="text-md font-bold truncate" :title="props.node.name">
+            {{ props.node.name }}
+          </div>
+          <div
+            v-if="props.node.public_remark"
+            class="mt-0.5 truncate text-[11px] font-normal leading-tight text-muted-foreground/75"
+            :title="props.node.public_remark"
+          >
+            {{ props.node.public_remark }}
+          </div>
         </div>
       </div>
     </template>
@@ -305,59 +309,63 @@ function openPingDialog() {
                 </span>
               </DataTooltip>
             </div>
-            <div class="grid grid-cols-6 gap-x-3">
-              <!-- 延迟 -->
-              <div
-                role="button" tabindex="0"
-                class="group/panel relative col-span-3 flex h-6 cursor-pointer flex-col gap-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                :title="latencyPanelTooltip" :aria-label="`${props.node.name} 延迟`" @click.stop="openPingDialog"
-                @keydown.enter.stop.prevent="openPingDialog" @keydown.space.stop.prevent="openPingDialog"
-              >
-                <div class="flex items-center justify-between text-[11px] leading-none relative">
-                  <span class="text-muted-foreground">延迟</span>
-                  <div class="border-t-2 border-dotted border-gray-500/10 mx-2 flex-1" />
-                  <span class="font-medium text-foreground/85">{{ latencyDisplay }}</span>
-                </div>
+            <div class="flex flex-col gap-y-2">
+              <div v-for="task in pingTaskDisplays" :key="task.key" class="grid grid-cols-2 gap-x-3">
+                <!-- 延迟 -->
                 <div
-                  class="grid h-full items-end gap-[1px] opacity-80"
-                  :style="{ gridTemplateColumns: `repeat(${latencyRenderBars.length}, minmax(0, 1fr))` }"
+                  role="button" tabindex="0"
+                  class="group/panel relative flex h-6 cursor-pointer flex-col gap-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  :title="task.latencyPanelTooltip" :aria-label="`${props.node.name} ${task.protocolLabel} 延迟`"
+                  @click.stop="openPingDialog"
+                  @keydown.enter.stop.prevent="openPingDialog" @keydown.space.stop.prevent="openPingDialog"
                 >
-                  <DataTooltip
-                    v-for="bar in latencyRenderBars" :key="bar.key" placement="top" :content="bar.tooltip"
-                    class="h-full w-full"
+                  <div class="flex items-center justify-between text-[11px] leading-none relative">
+                    <span class="shrink-0 text-muted-foreground">{{ task.protocolLabel }} 延迟</span>
+                    <div class="border-t-2 border-dotted border-gray-500/10 mx-2 flex-1" />
+                    <span class="shrink-0 font-medium text-foreground/85">{{ task.latencyDisplay }}</span>
+                  </div>
+                  <div
+                    class="grid h-full items-end gap-[1px] opacity-80"
+                    :style="{ gridTemplateColumns: `repeat(${task.latencyRenderBars.length}, minmax(0, 1fr))` }"
                   >
-                    <span
-                      class="block h-full w-full rounded-[1px] transition-transform duration-150 group-hover/data-tooltip:scale-y-200"
-                      :class="bar.className"
-                    />
-                  </DataTooltip>
+                    <DataTooltip
+                      v-for="bar in task.latencyRenderBars" :key="bar.key" placement="top" :content="bar.tooltip"
+                      class="h-full w-full"
+                    >
+                      <span
+                        class="block h-full w-full rounded-[1px] transition-transform duration-150 group-hover/data-tooltip:scale-y-200"
+                        :class="bar.className"
+                      />
+                    </DataTooltip>
+                  </div>
                 </div>
-              </div>
-              <!-- 丢包 -->
-              <div
-                role="button" tabindex="0"
-                class="group/panel relative col-span-3 flex h-6 cursor-pointer flex-col gap-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                :title="lossPanelTooltip" :aria-label="`${props.node.name} 丢包`" @click.stop="openPingDialog"
-                @keydown.enter.stop.prevent="openPingDialog" @keydown.space.stop.prevent="openPingDialog"
-              >
-                <div class="flex items-center justify-between text-[11px] leading-none">
-                  <span class="text-muted-foreground">丢包</span>
-                  <div class="border-t-2 border-dotted border-gray-500/10 mx-2 flex-1" />
-                  <span class="font-medium text-foreground/85">{{ lossDisplay }}</span>
-                </div>
+                <!-- 丢包 -->
                 <div
-                  class="grid h-full items-end gap-[1px] opacity-80 group-hover/panel:opacity-100"
-                  :style="{ gridTemplateColumns: `repeat(${lossRenderBars.length}, minmax(0, 1fr))` }"
+                  role="button" tabindex="0"
+                  class="group/panel relative flex h-6 cursor-pointer flex-col gap-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  :title="task.lossPanelTooltip" :aria-label="`${props.node.name} ${task.protocolLabel} 丢包`"
+                  @click.stop="openPingDialog"
+                  @keydown.enter.stop.prevent="openPingDialog" @keydown.space.stop.prevent="openPingDialog"
                 >
-                  <DataTooltip
-                    v-for="bar in lossRenderBars" :key="bar.key" placement="top" :content="bar.tooltip"
-                    class="h-full w-full"
+                  <div class="flex items-center justify-between text-[11px] leading-none">
+                    <span class="shrink-0 text-muted-foreground">{{ task.protocolLabel }} 丢包</span>
+                    <div class="border-t-2 border-dotted border-gray-500/10 mx-2 flex-1" />
+                    <span class="shrink-0 font-medium text-foreground/85">{{ task.lossDisplay }}</span>
+                  </div>
+                  <div
+                    class="grid h-full items-end gap-[1px] opacity-80 group-hover/panel:opacity-100"
+                    :style="{ gridTemplateColumns: `repeat(${task.lossRenderBars.length}, minmax(0, 1fr))` }"
                   >
-                    <span
-                      class="block h-full w-full rounded-[1px] transition-transform duration-150 group-hover/data-tooltip:scale-y-200"
-                      :class="bar.className"
-                    />
-                  </DataTooltip>
+                    <DataTooltip
+                      v-for="bar in task.lossRenderBars" :key="bar.key" placement="top" :content="bar.tooltip"
+                      class="h-full w-full"
+                    >
+                      <span
+                        class="block h-full w-full rounded-[1px] transition-transform duration-150 group-hover/data-tooltip:scale-y-200"
+                        :class="bar.className"
+                      />
+                    </DataTooltip>
+                  </div>
                 </div>
               </div>
             </div>

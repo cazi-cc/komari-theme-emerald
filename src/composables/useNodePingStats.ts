@@ -9,12 +9,21 @@ export interface NodePingHistoryPoint {
   loss: number | null
 }
 
+export type NodePingIpFamily = 'ipv4' | 'ipv6' | 'other'
+
+export interface NodePingTaskStats extends NodePingStatsState {
+  taskId: number
+  taskName: string
+  ipFamily: NodePingIpFamily
+}
+
 export interface NodePingStatsState {
   avgLatency: number
   avgLoss: number
   avgVolatility: number
   history: NodePingHistoryPoint[]
   hasData: boolean
+  taskStats: NodePingTaskStats[]
 }
 
 interface PingRecord {
@@ -26,10 +35,17 @@ interface PingRecord {
 
 interface SharedPingRecordsResponse {
   records?: PingRecord[]
+  tasks?: PingTask[]
+}
+
+interface PingTask {
+  id: number
+  name: string
 }
 
 interface SharedPingRecordsState {
   recordsByClient: Map<string, PingRecord[]>
+  tasks: PingTask[]
 }
 
 interface SharedPingRecordsEntry {
@@ -43,10 +59,12 @@ interface SharedPingRecordsEntry {
 }
 
 export const NODE_PING_BAR_COUNT = 10
-const CACHE_VERSION = 5
+const CACHE_VERSION = 6
 const CACHE_KEY_PREFIX = 'komari-theme-emerald:node-ping-stats'
 const FULL_LOSS_EPSILON = 1e-6
 const PING_RECORD_REFRESH_INTERVAL_MS = 60_000
+const IPV4_TASK_NAME_RE = /(?:^|[^a-z0-9])(?:ipv4|v4)(?:$|[^a-z0-9])/
+const IPV6_TASK_NAME_RE = /(?:^|[^a-z0-9])(?:ipv6|v6)(?:$|[^a-z0-9])/
 const sharedPingRecordsCache = new Map<number, SharedPingRecordsEntry>()
 
 interface TaskRecordSummary {
@@ -61,6 +79,7 @@ function createEmptyStats(): NodePingStatsState {
     avgVolatility: 0,
     history: [],
     hasData: false,
+    taskStats: [],
   }
 }
 
@@ -94,7 +113,7 @@ function getIncludedTaskIds(records: PingRecord[]): Set<number> {
 
   return new Set(
     [...recordSummaries.entries()]
-      .filter(([, summary]) => summary.total > 0 && summary.success > 0)
+      .filter(([, summary]) => summary.total > 0)
       .map(([taskId]) => taskId),
   )
 }
@@ -127,6 +146,25 @@ function isValidStatsState(value: unknown): value is NodePingStatsState {
     && typeof state.hasData === 'boolean'
     && Array.isArray(state.history)
     && state.history.every(isValidHistoryPoint)
+    && Array.isArray(state.taskStats)
+    && state.taskStats.every(isValidTaskStats)
+}
+
+function isValidTaskStats(value: unknown): value is NodePingTaskStats {
+  if (!value || typeof value !== 'object')
+    return false
+
+  const task = value as Record<string, unknown>
+  return typeof task.taskId === 'number'
+    && typeof task.taskName === 'string'
+    && (task.ipFamily === 'ipv4' || task.ipFamily === 'ipv6' || task.ipFamily === 'other')
+    && typeof task.avgLatency === 'number'
+    && typeof task.avgLoss === 'number'
+    && typeof task.avgVolatility === 'number'
+    && typeof task.hasData === 'boolean'
+    && Array.isArray(task.history)
+    && task.history.every(isValidHistoryPoint)
+    && Array.isArray(task.taskStats)
 }
 
 function readStatsCache(uuid: string, hours: number): NodePingStatsState | null {
@@ -228,6 +266,7 @@ async function loadSharedPingRecords(entry: SharedPingRecordsEntry, hours: numbe
 
       entry.data.value = {
         recordsByClient: buildRecordsByClient(result?.records ?? []),
+        tasks: result?.tasks ?? [],
       }
       entry.lastFetchedAt = Date.now()
     }
@@ -337,7 +376,7 @@ function getPercentile(values: number[], percentile: number): number | null {
   return lowerValue + (upperValue - lowerValue) * (position - lowerIndex)
 }
 
-function buildStats(records: PingRecord[]): NodePingStatsState {
+function buildBaseStats(records: PingRecord[]): NodePingStatsState {
   const includedTaskIds = getIncludedTaskIds(records)
 
   if (!includedTaskIds.size)
@@ -362,11 +401,12 @@ function buildStats(records: PingRecord[]): NodePingStatsState {
       .map(record => record.value)
       .filter(value => value >= 0)
 
+    taskLossValues.push((recordsByTask.length - validValues.length) / recordsByTask.length * 100)
+
     if (!validValues.length)
       continue
 
     latencyValues.push(average(validValues))
-    taskLossValues.push((recordsByTask.length - validValues.length) / recordsByTask.length * 100)
 
     if (validValues.length > 1) {
       const p50 = getPercentile(validValues, 0.5)
@@ -395,6 +435,55 @@ function buildStats(records: PingRecord[]): NodePingStatsState {
     avgVolatility,
     history,
     hasData,
+    taskStats: [],
+  }
+}
+
+function detectIpFamily(taskName: string): NodePingIpFamily {
+  const normalizedName = taskName.trim().toLowerCase()
+  if (IPV6_TASK_NAME_RE.test(normalizedName))
+    return 'ipv6'
+  if (IPV4_TASK_NAME_RE.test(normalizedName))
+    return 'ipv4'
+  return 'other'
+}
+
+function getIpFamilySortOrder(family: NodePingIpFamily): number {
+  if (family === 'ipv4')
+    return 0
+  if (family === 'ipv6')
+    return 1
+  return 2
+}
+
+function buildStats(records: PingRecord[], tasks: PingTask[]): NodePingStatsState {
+  const aggregateStats = buildBaseStats(records)
+  const tasksById = new Map(tasks.map(task => [task.id, task]))
+  const recordsByTask = new Map<number, PingRecord[]>()
+
+  for (const record of records) {
+    const taskRecords = recordsByTask.get(record.task_id) ?? []
+    taskRecords.push(record)
+    recordsByTask.set(record.task_id, taskRecords)
+  }
+
+  const taskStats = Array.from(recordsByTask.entries(), ([taskId, taskRecords]): NodePingTaskStats => {
+    const taskName = tasksById.get(taskId)?.name || `Ping ${taskId}`
+    return {
+      ...buildBaseStats(taskRecords),
+      taskId,
+      taskName,
+      ipFamily: detectIpFamily(taskName),
+    }
+  })
+    .sort((left, right) => {
+      const familyOrder = getIpFamilySortOrder(left.ipFamily) - getIpFamilySortOrder(right.ipFamily)
+      return familyOrder || left.taskId - right.taskId
+    })
+
+  return {
+    ...aggregateStats,
+    taskStats,
   }
 }
 
@@ -450,7 +539,7 @@ export function useNodePingStats(
       return readStatsCache(nodeUuid, hours) ?? createEmptyStats()
 
     const records = state.recordsByClient.get(nodeUuid) ?? []
-    return records.length ? buildStats(records) : createEmptyStats()
+    return records.length ? buildStats(records, state.tasks) : createEmptyStats()
   })
 
   // 副作用：按需触发首次共享加载并维护 loading/error，不再命令式写入 stats。

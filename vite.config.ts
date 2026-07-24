@@ -3,10 +3,11 @@ import { execSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
+import process from 'node:process'
 import { fileURLToPath, URL } from 'node:url'
 import tailwindcss from '@tailwindcss/vite'
 import vue from '@vitejs/plugin-vue'
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 
 import vueDevTools from 'vite-plugin-vue-devtools'
 
@@ -87,41 +88,59 @@ function komariThemeZip(): Plugin {
 
 const packageJson = require('./package.json')
 
-export default defineConfig({
-  define: {
-    __BUILD_VERSION__: JSON.stringify(packageJson.version),
-    __BUILD_GIT_HASH__: JSON.stringify(getCommitHash()),
-  },
-  plugins: [
-    vue(),
-    vueDevTools(),
-    tailwindcss(),
-    komariThemeZip(),
-  ],
-  resolve: {
-    alias: {
-      '@': fileURLToPath(new URL('./src', import.meta.url)),
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), '')
+  const devProxyTarget = env.VITE_DEV_PROXY_TARGET
+
+  return {
+    define: {
+      __BUILD_VERSION__: JSON.stringify(packageJson.version),
+      __BUILD_GIT_HASH__: JSON.stringify(getCommitHash()),
     },
-  },
-  server: {
-    host: '0.0.0.0',
-  },
-  build: {
-    chunkSizeWarningLimit: 600,
-    rollupOptions: {
-      onwarn(warning, defaultHandler) {
-        if (shouldIgnoreRollupWarning(warning))
-          return
-        defaultHandler(warning)
+    plugins: [
+      vue(),
+      vueDevTools(),
+      tailwindcss(),
+      komariThemeZip(),
+    ],
+    resolve: {
+      alias: {
+        '@': fileURLToPath(new URL('./src', import.meta.url)),
       },
-      output: {
-        manualChunks: {
-          'vue-vendor': ['vue', 'vue-router', 'pinia'],
-          'echarts': ['echarts', 'vue-echarts'],
-          'reka-ui': ['reka-ui'],
-          'vueuse': ['@vueuse/core'],
+    },
+    server: {
+      host: '0.0.0.0',
+      proxy: devProxyTarget
+        ? {
+            '/api': {
+              target: devProxyTarget,
+              changeOrigin: true,
+              secure: true,
+              ws: true,
+              headers: {
+                origin: devProxyTarget,
+              },
+            },
+          }
+        : undefined,
+    },
+    build: {
+      chunkSizeWarningLimit: 600,
+      rollupOptions: {
+        onwarn(warning, defaultHandler) {
+          if (shouldIgnoreRollupWarning(warning))
+            return
+          defaultHandler(warning)
+        },
+        output: {
+          manualChunks: {
+            'vue-vendor': ['vue', 'vue-router', 'pinia'],
+            'echarts': ['echarts', 'vue-echarts'],
+            'reka-ui': ['reka-ui'],
+            'vueuse': ['@vueuse/core'],
+          },
         },
       },
     },
-  },
+  }
 })
