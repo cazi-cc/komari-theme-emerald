@@ -1,6 +1,7 @@
 name: Rolling v1.0.0 Release
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - master
