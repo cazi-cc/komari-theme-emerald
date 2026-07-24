@@ -38,7 +38,7 @@ interface SharedPingRecordsResponse {
   tasks?: PingTask[]
 }
 
-interface PingTask {
+export interface PingTask {
   id: number
   name: string
 }
@@ -611,6 +611,12 @@ export function useNodePingStats(
     stats,
     loading,
     error,
+    tasks: computed(() => {
+      const { hours, enabled } = resolved.value
+      if (!enabled)
+        return []
+      return getSharedPingRecordsEntry(hours).data.value?.tasks ?? []
+    }),
     history: computed(() => stats.value.history),
     avgLatency: computed(() => stats.value.avgLatency),
     avgLoss: computed(() => stats.value.avgLoss),

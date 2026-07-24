@@ -142,11 +142,11 @@ function openPingDialog() {
             {{ props.node.name }}
           </div>
           <div
-            v-if="props.node.public_remark"
-            class="mt-0.5 truncate text-[11px] font-normal leading-tight text-muted-foreground/75"
-            :title="props.node.public_remark"
+            class="mt-0.5 min-h-[14px] truncate text-[11px] font-normal leading-tight text-muted-foreground/75"
+            :class="!props.node.public_remark && 'invisible'"
+            :title="props.node.public_remark || ''"
           >
-            {{ props.node.public_remark }}
+            {{ props.node.public_remark || '无公开备注' }}
           </div>
         </div>
       </div>
@@ -310,22 +310,29 @@ function openPingDialog() {
               </DataTooltip>
             </div>
             <div class="flex flex-col gap-y-2">
-              <div v-for="task in pingTaskDisplays" :key="task.key" class="grid grid-cols-2 gap-x-3">
-                <!-- 延迟 -->
+              <div
+                v-for="task in pingTaskDisplays" :key="task.key"
+                class="grid h-8 grid-cols-[minmax(64px,0.75fr)_minmax(0,1fr)_minmax(0,1fr)] items-center gap-x-2"
+              >
+                <DataTooltip placement="top" :content="task.taskName" class="min-w-0">
+                  <span class="block truncate text-[11px] font-medium text-foreground/75">
+                    {{ task.taskName }}
+                  </span>
+                </DataTooltip>
                 <div
                   role="button" tabindex="0"
-                  class="group/panel relative flex h-6 cursor-pointer flex-col gap-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  :title="task.latencyPanelTooltip" :aria-label="`${props.node.name} ${task.protocolLabel} 延迟`"
+                  class="group/panel relative flex h-7 cursor-pointer flex-col gap-1 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  :title="task.latencyPanelTooltip" :aria-label="`${props.node.name} ${task.taskName} 延迟`"
                   @click.stop="openPingDialog"
                   @keydown.enter.stop.prevent="openPingDialog" @keydown.space.stop.prevent="openPingDialog"
                 >
                   <div class="flex items-center justify-between text-[11px] leading-none relative">
-                    <span class="shrink-0 text-muted-foreground">{{ task.protocolLabel }} 延迟</span>
-                    <div class="border-t-2 border-dotted border-gray-500/10 mx-2 flex-1" />
+                    <span class="shrink-0 text-muted-foreground">延迟</span>
+                    <div class="border-t-2 border-dotted border-gray-500/10 mx-1 flex-1" />
                     <span class="shrink-0 font-medium text-foreground/85">{{ task.latencyDisplay }}</span>
                   </div>
                   <div
-                    class="grid h-full items-end gap-[1px] opacity-80"
+                    class="grid h-2 items-end gap-[1px] opacity-80"
                     :style="{ gridTemplateColumns: `repeat(${task.latencyRenderBars.length}, minmax(0, 1fr))` }"
                   >
                     <DataTooltip
@@ -334,26 +341,25 @@ function openPingDialog() {
                     >
                       <span
                         class="block h-full w-full rounded-[1px] transition-transform duration-150 group-hover/data-tooltip:scale-y-200"
-                        :class="bar.className"
+                        :class="bar.className" :style="bar.style"
                       />
                     </DataTooltip>
                   </div>
                 </div>
-                <!-- 丢包 -->
                 <div
                   role="button" tabindex="0"
-                  class="group/panel relative flex h-6 cursor-pointer flex-col gap-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  :title="task.lossPanelTooltip" :aria-label="`${props.node.name} ${task.protocolLabel} 丢包`"
+                  class="group/panel relative flex h-7 cursor-pointer flex-col gap-1 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  :title="task.lossPanelTooltip" :aria-label="`${props.node.name} ${task.taskName} 丢包`"
                   @click.stop="openPingDialog"
                   @keydown.enter.stop.prevent="openPingDialog" @keydown.space.stop.prevent="openPingDialog"
                 >
                   <div class="flex items-center justify-between text-[11px] leading-none">
-                    <span class="shrink-0 text-muted-foreground">{{ task.protocolLabel }} 丢包</span>
-                    <div class="border-t-2 border-dotted border-gray-500/10 mx-2 flex-1" />
+                    <span class="shrink-0 text-muted-foreground">丢包</span>
+                    <div class="border-t-2 border-dotted border-gray-500/10 mx-1 flex-1" />
                     <span class="shrink-0 font-medium text-foreground/85">{{ task.lossDisplay }}</span>
                   </div>
                   <div
-                    class="grid h-full items-end gap-[1px] opacity-80 group-hover/panel:opacity-100"
+                    class="grid h-2 items-end gap-[1px] opacity-80 group-hover/panel:opacity-100"
                     :style="{ gridTemplateColumns: `repeat(${task.lossRenderBars.length}, minmax(0, 1fr))` }"
                   >
                     <DataTooltip
@@ -362,7 +368,7 @@ function openPingDialog() {
                     >
                       <span
                         class="block h-full w-full rounded-[1px] transition-transform duration-150 group-hover/data-tooltip:scale-y-200"
-                        :class="bar.className"
+                        :class="bar.className" :style="bar.style"
                       />
                     </DataTooltip>
                   </div>

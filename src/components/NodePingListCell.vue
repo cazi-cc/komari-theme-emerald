@@ -27,7 +27,7 @@ const {
           :content="bar.tooltip"
           class="h-full w-full"
         >
-          <span class="block h-full w-full rounded-[1px] transition-all group-hover:opacity-50 hover:scale-y-160 hover:opacity-100" :class="bar.className" />
+          <span class="block h-full w-full rounded-[1px] transition-all group-hover:opacity-50 hover:scale-y-160 hover:opacity-100" :class="bar.className" :style="bar.style" />
         </DataTooltip>
       </div>
     </div>
@@ -43,7 +43,7 @@ const {
           :content="bar.tooltip"
           class="h-full w-full"
         >
-          <span class="block h-full w-full rounded-[1px] transition-all group-hover:opacity-50 hover:scale-y-160 hover:opacity-100" :class="bar.className" />
+          <span class="block h-full w-full rounded-[1px] transition-all group-hover:opacity-50 hover:scale-y-160 hover:opacity-100" :class="bar.className" :style="bar.style" />
         </DataTooltip>
       </div>
     </div>

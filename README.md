@@ -1,22 +1,35 @@
 <h3 align="center"> Komari Emerald Cazi </h3>
 <p align="center">
-基于 Komari Emerald 定制的 Komari Monitor 双栈监控主题
+基于 Komari Emerald 定制的 Komari Monitor 多任务监控主题
 </p>
 
 ![preview](/docs/preview.png)
 
 ## 使用
 
-1. 从 [Release 页面](https://github.com/cazi-cc/komari-theme-emerald/releases) 下载最新的 `komari-theme-emerald-build-*.zip` 文件
-2. 登录 Komari Monitor 后，点击 `设置`，选择 `主题管理` 选项卡
-3. 点击 `上传主题` 按钮，选择下载的 `komari-theme-emerald-build-*.zip` 文件
-4. 刷新页面，即可看到新的主题
+### 远程导入
+
+1. 登录 Komari 后台，进入 `设置` → `主题管理`
+2. 点击 `导入主题`
+3. 输入 `https://github.com/cazi-cc/komari-theme-emerald`
+4. 检测完成后确认导入，并将 `Emerald-Cazi` 设为当前主题
+
+### ZIP 上传
+
+也可以从 [Release 页面](https://github.com/cazi-cc/komari-theme-emerald/releases) 下载最新的
+`komari-theme-emerald-build-*.zip`，再通过后台的 `上传主题` 安装。
 
 ## 定制功能
 
-- 首页节点卡片按 IPv4、IPv6 两行独立显示延迟和丢包，不再合并双栈任务数据
-- 最优延迟和最低丢包使用更醒目的 `#5EEAA6`，下一档使用 `#47B592`
+- 每个节点可独立选择、排序最多 8 个首页延迟监测任务
+- 首页直接显示 Komari 延迟监测任务名称，延迟在左、丢包在右
+- 所有节点卡片使用统一任务行数，无数据和未配置位置以 `--` 占位
+- 独立的 Emerald 后台设置面板，支持节点任务、颜色、阈值、图表和原主题设置
+- 节点详情支持 1 小时至 7 天、双轴合图/分图、缩放、P95、异常阈值、自动刷新及 PNG/CSV 导出
+- 最优延迟和最低丢包默认使用醒目的 `#5EEAA6`，下一档使用 `#47B592`，并允许自定义
 - 节点名称下方单独显示公开备注
+
+> 3 天和 7 天范围需要 Komari 将 `ping.latency_ms` 与 `ping.loss` 指标至少保留 7 天。
 
 ## 环境要求
 

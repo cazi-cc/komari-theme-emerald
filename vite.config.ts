@@ -127,6 +127,10 @@ export default defineConfig(({ mode }) => {
     build: {
       chunkSizeWarningLimit: 600,
       rollupOptions: {
+        input: {
+          index: resolve(__dirname, 'index.html'),
+          settings: resolve(__dirname, 'settings.html'),
+        },
         onwarn(warning, defaultHandler) {
           if (shouldIgnoreRollupWarning(warning))
             return

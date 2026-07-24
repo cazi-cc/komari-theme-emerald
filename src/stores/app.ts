@@ -3,6 +3,7 @@ import type { ByteDecimalsConfig } from '@/utils/helper'
 import { usePreferredDark, useStorageAsync } from '@vueuse/core'
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
+import { normalizeThemeSettings } from '@/utils/themeSettings'
 
 export type ThemeMode = 'auto' | 'light' | 'dark'
 type Lang = 'zh-CN' | 'en-US'
@@ -37,6 +38,7 @@ const useAppStore = defineStore('app', () => {
   const nodeSelectedGroup = useStorageAsync<string>('nodeSelectedGroup', 'all', localStorage)
   const isLoggedIn = ref<boolean>(false)
   const connectionError = ref<boolean>(false)
+  const themeSettings = computed(() => normalizeThemeSettings(publicSettings.value?.theme_settings))
 
   // 首页滚动位置记忆
   const homeScrollPosition = ref<number>(0)
@@ -342,6 +344,7 @@ const useAppStore = defineStore('app', () => {
     isLoggedIn,
     publicSettings,
     connectionError,
+    themeSettings,
     homeScrollPosition,
     updateThemeMode,
     updateLoginState,

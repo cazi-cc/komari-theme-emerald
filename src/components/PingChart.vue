@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Icon } from '@iconify/vue'
 import dayjs from 'dayjs'
-import { computed, onMounted, ref, shallowRef, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import VChart from 'vue-echarts'
 import { Button } from '@/components/ui/button'
 import { DataTooltip } from '@/components/ui/data-tooltip'
@@ -57,6 +57,8 @@ const presetViews = [
   { label: '6 小时', hours: 6 },
   { label: '12 小时', hours: 12 },
   { label: '1 天', hours: 24 },
+  { label: '3 天', hours: 72 },
+  { label: '7 天', hours: 168 },
 ]
 
 // 可用视图列表
@@ -96,9 +98,11 @@ const selectedHours = computed(() => {
 
 // 初始化默认视图
 watch(availableViews, (views) => {
-  const firstView = views[0]
-  if (firstView && !selectedView.value) {
-    selectedView.value = firstView.label
+  if (!selectedView.value) {
+    const preferred = views.find(view => view.hours === appStore.themeSettings.pingChartDefaultHours)
+    const initialView = preferred ?? views[0]
+    if (initialView)
+      selectedView.value = initialView.label
   }
 }, { immediate: true })
 
@@ -109,6 +113,7 @@ interface PingRecord {
   task_id: number
   time: string
   value: number
+  metric?: 'latency' | 'loss'
 }
 
 interface TaskInfo {
@@ -188,7 +193,18 @@ const selectedTaskIds = ref<number[]>([])
 const cutPeak = ref(false)
 const showDelay = ref(true)
 const showLoss = ref(true)
-const chartMargin = { top: 30, right: 24, bottom: 52, left: 56 }
+const chartLayout = ref(appStore.themeSettings.pingChartLayout)
+const autoRefresh = ref(appStore.themeSettings.pingChartAutoRefresh)
+const combinedChartRef = ref<unknown>(null)
+const latencyChartRef = ref<unknown>(null)
+const lossChartRef = ref<unknown>(null)
+const chartMargin = computed(() => ({
+  top: 30,
+  right: 56,
+  bottom: appStore.themeSettings.pingChartShowZoom ? 72 : 52,
+  left: 56,
+}))
+let autoRefreshTimer: ReturnType<typeof setInterval> | null = null
 
 const mergeToleranceMs = computed(() => {
   const taskIntervals = tasks.value
@@ -243,17 +259,15 @@ async function fetchMetricRecords(uuid: string, hours: number): Promise<PingChar
       if (taskId === null)
         continue
 
-      if (point.value === null)
-        continue
-
-      if (series.metric_key === 'ping.loss' && point.value <= 0)
+      if (point.value === null || point.value < 0)
         continue
 
       records.push({
         client: uuid,
         task_id: taskId,
         time: point.time,
-        value: series.metric_key === 'ping.loss' ? -1 : point.value,
+        value: series.metric_key === 'ping.loss' ? point.value * 100 : point.value,
+        metric: series.metric_key === 'ping.loss' ? 'loss' : 'latency',
       })
     }
   }
@@ -284,8 +298,13 @@ async function fetchLegacyRecords(uuid: string, hours: number): Promise<PingChar
     hours,
   })
 
+  const records = (result?.records ?? []).flatMap((record): PingRecord[] => [
+    ...(record.value >= 0 ? [{ ...record, metric: 'latency' as const }] : []),
+    { ...record, value: record.value < 0 ? 100 : 0, metric: 'loss' as const },
+  ])
+
   return {
-    records: result?.records ?? [],
+    records,
     tasks: result?.tasks ?? [],
   }
 }
@@ -380,7 +399,7 @@ const mergedData = computed(() => {
     }
 
     const group = grouped.get(useTs)!
-    group[rec.task_id] = rec.value < 0 ? null : rec.value
+    group[`${rec.metric ?? 'latency'}:${rec.task_id}`] = rec.value
   }
 
   const merged = Array.from(grouped.values()).sort(
@@ -409,7 +428,7 @@ const mergedData = computed(() => {
 
 const chartData = computed(() => {
   let data = mergedData.value
-  const selectedKeys = selectedTaskIds.value.map(String)
+  const selectedKeys = selectedTaskIds.value.map(taskId => `latency:${taskId}`)
 
   if (selectedKeys.length === 0)
     return []
@@ -453,6 +472,9 @@ const showDateInAxis = computed(() => selectedHours.value >= 24)
 
 // 获取任务颜色（根据任务在完整列表中的索引）
 function getTaskColor(taskId: number): string {
+  const configured = appStore.themeSettings.pingTaskColors[String(taskId)]
+  if (configured)
+    return configured
   const taskIndex = tasks.value.findIndex(t => t.id === taskId)
   const safeIndex = Math.max(0, taskIndex % chartColors.length)
   return chartColors[safeIndex]!
@@ -467,19 +489,19 @@ const latestValues = computed(() => {
   for (const task of tasks.value) {
     for (let i = remoteData.value.length - 1; i >= 0; i--) {
       const rec = remoteData.value[i]
-      if (rec && rec.task_id === task.id && rec.value >= 0) {
+      if (rec && rec.task_id === task.id && rec.metric !== 'loss' && rec.value >= 0) {
         latestMap.set(task.id, rec.value)
         break
       }
     }
   }
 
-  return tasks.value.map((task, idx) => {
-    const safeIdx = Math.max(0, idx % chartColors.length)
+  return tasks.value.map((task) => {
     return {
       ...task,
       latestValue: latestMap.get(task.id) ?? null,
-      color: chartColors[safeIdx]!,
+      color: getTaskColor(task.id),
+      p95: getTaskPercentile(task.id, 0.95),
     }
   })
 })
@@ -488,45 +510,16 @@ const selectedTasks = computed(() => {
   return tasks.value.filter(t => selectedTaskIds.value.includes(t.id))
 })
 
-const packetLossMarkers = computed(() => {
-  const data = mergedData.value
-  const markers = new Map<number, number[]>()
-
-  if (!data.length || !selectedTasks.value.length)
-    return markers
-
-  const chartTimes = data.map(item => dayjs(item.time as string).valueOf())
-  const toleranceMs = mergeToleranceMs.value
-
-  for (const task of selectedTasks.value) {
-    const points = new Set<number>()
-    const taskLossRecords = remoteData.value.filter(rec => rec.task_id === task.id && rec.value < 0)
-
-    for (const record of taskLossRecords) {
-      const lossTs = dayjs(record.time).valueOf()
-      let matchedIndex = -1
-
-      for (let i = 0; i < chartTimes.length; i++) {
-        const chartTs = chartTimes[i]
-        if (chartTs === undefined)
-          continue
-
-        if (Math.abs(chartTs - lossTs) <= toleranceMs) {
-          matchedIndex = i
-          break
-        }
-      }
-
-      if (matchedIndex >= 0) {
-        points.add(matchedIndex)
-      }
-    }
-
-    markers.set(task.id, Array.from(points).sort((a, b) => a - b))
-  }
-
-  return markers
-})
+function getTaskPercentile(taskId: number, percentile: number): number | null {
+  const values = remoteData.value
+    .filter(record => record.task_id === taskId && record.metric !== 'loss' && record.value >= 0)
+    .map(record => record.value)
+    .sort((left, right) => left - right)
+  if (!values.length)
+    return null
+  const index = Math.min(values.length - 1, Math.max(0, Math.ceil(values.length * percentile) - 1))
+  return values[index] ?? null
+}
 
 // 切换任务选中状态
 function toggleTask(taskId: number) {
@@ -578,135 +571,255 @@ const baseTooltipConfig = computed(() => ({
   },
 }))
 
-const pingChartOption = computed(() => {
+type ChartMode = 'combined' | 'latency' | 'loss'
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll('\'', '&#039;')
+}
+
+function buildPingChartOption(mode: ChartMode) {
   const taskList = selectedTasks.value
   const data = chartData.value
   const hours = selectedHours.value
+  const includeLatency = mode !== 'loss' && showDelay.value
+  const includeLoss = mode !== 'latency' && showLoss.value
+  const combined = mode === 'combined'
+  const latencyThresholds = [
+    { name: '延迟警告', yAxis: appStore.themeSettings.pingLatencyWarning, lineStyle: { color: appStore.themeSettings.pingWarningColor } },
+    { name: '延迟严重', yAxis: appStore.themeSettings.pingLatencyCritical, lineStyle: { color: appStore.themeSettings.pingCriticalColor } },
+  ]
+  const lossThresholds = [
+    { name: '丢包警告', yAxis: appStore.themeSettings.pingLossWarning, lineStyle: { color: appStore.themeSettings.pingWarningColor } },
+    { name: '丢包严重', yAxis: appStore.themeSettings.pingLossCritical, lineStyle: { color: appStore.themeSettings.pingCriticalColor } },
+  ]
 
-  // 构建 series，确保颜色与卡片一致
-  const series = taskList.map((task) => {
-    const color = getTaskColor(task.id)
-    const lossMarkerIndexes = packetLossMarkers.value.get(task.id) || []
-    return {
-      name: task.name,
-      type: 'line' as const,
-      data: data.map(d => d[task.id] as number | null ?? null),
-      smooth: showDelay.value ? (cutPeak.value ? 0.6 : 0.1) : 0,
-      showSymbol: false,
-      connectNulls: false,
-      lineStyle: { width: showDelay.value ? 1.5 : 0, color, cap: 'round' as const },
-      itemStyle: { color, opacity: showDelay.value ? 1 : 0 },
-      markLine: showLoss.value && lossMarkerIndexes.length
-        ? {
-            silent: true,
-            symbol: ['none', 'none'],
-            animation: false,
-            label: { show: false },
-            lineStyle: {
-              color,
-              width: 1,
-              type: 'solid' as const,
-              opacity: 0.55,
-            },
-            data: lossMarkerIndexes.map(index => ({
-              xAxis: index,
-            })),
-          }
-        : undefined,
-    }
-  })
+  const latencySeries = includeLatency
+    ? taskList.map((task, index) => {
+        const color = getTaskColor(task.id)
+        return {
+          id: `latency-${task.id}`,
+          name: `${task.name} 延迟`,
+          type: 'line' as const,
+          yAxisIndex: 0,
+          data: data.map(d => d[`latency:${task.id}`] as number | null ?? null),
+          smooth: cutPeak.value ? 0.6 : 0.1,
+          showSymbol: false,
+          connectNulls: false,
+          lineStyle: { width: 1.8, color, cap: 'round' as const },
+          itemStyle: { color },
+          markLine: index === 0
+            ? {
+                silent: true,
+                symbol: ['none', 'none'],
+                label: { show: true, position: 'insideEndTop', fontSize: 10 },
+                lineStyle: { width: 1, type: 'dashed' as const, opacity: 0.65 },
+                data: latencyThresholds,
+              }
+            : undefined,
+          markPoint: {
+            symbolSize: 28,
+            label: { fontSize: 9, formatter: '峰值' },
+            data: [{ type: 'max', name: '峰值' }],
+          },
+        }
+      })
+    : []
 
-  // 颜色映射表（用于 Tooltip）
-  const colorMap = new Map<number, string>()
-  tasks.value.forEach((task, idx) => {
-    const safeIdx = Math.max(0, idx % chartColors.length)
-    colorMap.set(task.id, chartColors[safeIdx]!)
+  const lossSeries = includeLoss
+    ? taskList.map((task, index) => {
+        const color = getTaskColor(task.id)
+        return {
+          id: `loss-${task.id}`,
+          name: `${task.name} 丢包`,
+          type: 'line' as const,
+          yAxisIndex: combined ? 1 : 0,
+          data: data.map(d => d[`loss:${task.id}`] as number | null ?? null),
+          smooth: false,
+          step: 'end' as const,
+          showSymbol: false,
+          connectNulls: false,
+          lineStyle: { width: 1.4, color, type: 'dashed' as const, opacity: 0.8 },
+          areaStyle: { color, opacity: 0.05 },
+          itemStyle: { color },
+          markLine: index === 0
+            ? {
+                silent: true,
+                symbol: ['none', 'none'],
+                label: { show: true, position: 'insideEndTop', fontSize: 10 },
+                lineStyle: { width: 1, type: 'dotted' as const, opacity: 0.65 },
+                data: lossThresholds,
+              }
+            : undefined,
+        }
+      })
+    : []
+  const series = [...latencySeries, ...lossSeries]
+
+  const valueAxis = (metric: 'latency' | 'loss', position: 'left' | 'right' = 'left') => ({
+    type: 'value' as const,
+    name: metric === 'latency' ? '延迟 (ms)' : '丢包 (%)',
+    position,
+    min: 0,
+    max: metric === 'loss' ? 100 : undefined,
+    nameTextStyle: { color: chartThemeColors.value.textSecondary },
+    axisLabel: {
+      fontSize: 11,
+      color: chartThemeColors.value.textSecondary,
+      formatter: metric === 'loss' ? '{value}%' : '{value}',
+    },
+    axisLine: { show: false },
+    axisTick: { show: false },
+    splitLine: {
+      show: position === 'left',
+      lineStyle: {
+        color: chartThemeColors.value.splitLineColor,
+        type: 'dashed' as const,
+      },
+    },
   })
 
   return {
     animation: false,
-    // 全局颜色设置（用于图例等）
-    color: tasks.value.map((_, idx) => {
-      const safeIdx = Math.max(0, idx % chartColors.length)
-      return chartColors[safeIdx]!
-    }),
+    color: taskList.map(task => getTaskColor(task.id)),
     tooltip: {
       ...baseTooltipConfig.value,
       formatter: (params: unknown) => {
-        const p = params as Array<{ seriesName: string, value: number | null, dataIndex: number }>
-        if (!p.length)
+        const items = params as Array<{
+          seriesId: string
+          seriesName: string
+          value: number | null
+          dataIndex: number
+          color: string
+        }>
+        const first = items[0]
+        if (!first)
           return ''
-        const firstParam = p[0]
-        if (!firstParam)
-          return ''
-        const rowData = data[firstParam.dataIndex]
-        if (!rowData)
+        const row = data[first.dataIndex]
+        if (!row)
           return ''
 
-        const time = rowData.time as string
-        const timeStr = formatTimeForTooltip(time, hours)
-        let html = `<div style="font-weight:600;margin-bottom:6px;color:${chartThemeColors.value.textSecondary}">${timeStr}</div>`
+        let html = `<div style="font-weight:600;margin-bottom:6px;color:${chartThemeColors.value.textSecondary}">${formatTimeForTooltip(row.time as string, hours)}</div>`
         html += '<div style="display:flex;flex-direction:column;gap:4px">'
-
-        // 按延迟值排序显示
-        const sortedParams = [...p].sort((a, b) => (a.value ?? 0) - (b.value ?? 0))
-
-        for (const item of sortedParams) {
-          if (item.value !== null && item.value !== undefined) {
-            // 通过任务名找到对应的任务ID，再获取颜色
-            const task = tasks.value.find(t => t.name === item.seriesName)
-            const color = task ? colorMap.get(task.id) || chartColors[0] : chartColors[0]
-            const colorDot = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color};margin-right:8px;flex-shrink:0"></span>`
-            html += `<div style="display:flex;align-items:center">${colorDot}<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${item.seriesName}</span><span style="margin-left:auto;font-weight:600;margin-left:16px;font-variant-numeric:tabular-nums">${Math.round(item.value)} ms</span></div>`
-          }
+        for (const item of items) {
+          if (item.value === null || item.value === undefined)
+            continue
+          const isLoss = String(item.seriesId).startsWith('loss-')
+          const displayValue = isLoss ? `${item.value.toFixed(2)}%` : `${Math.round(item.value)} ms`
+          const colorDot = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${item.color};margin-right:8px;flex-shrink:0"></span>`
+          html += `<div style="display:flex;align-items:center">${colorDot}<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(item.seriesName)}</span><span style="margin-left:16px;font-weight:600;font-variant-numeric:tabular-nums">${displayValue}</span></div>`
         }
-        html += '</div>'
-        return html
+        return `${html}</div>`
       },
     },
     legend: {
       type: 'scroll',
-      bottom: 0,
+      bottom: appStore.themeSettings.pingChartShowZoom ? 24 : 0,
       itemWidth: 12,
-      itemHeight: 12,
-      itemGap: 16,
-      icon: 'roundRect',
-      textStyle: { fontSize: 11, color: chartThemeColors.value.textSecondary },
-      data: taskList.map(t => t.name),
+      itemHeight: 8,
+      itemGap: 14,
+      textStyle: { fontSize: 10, color: chartThemeColors.value.textSecondary },
+      data: series.map(item => item.name),
     },
-    grid: chartMargin,
+    dataZoom: appStore.themeSettings.pingChartShowZoom
+      ? [
+          { type: 'inside' as const, start: 0, end: 100 },
+          {
+            type: 'slider' as const,
+            height: 14,
+            bottom: 0,
+            borderColor: 'transparent',
+            fillerColor: isDark.value ? 'rgba(52,211,153,.16)' : 'rgba(5,150,105,.12)',
+            backgroundColor: chartThemeColors.value.splitLineColor,
+            showDetail: false,
+          },
+        ]
+      : [{ type: 'inside' as const, start: 0, end: 100 }],
+    grid: chartMargin.value,
     xAxis: {
       type: 'category',
       data: data.map(d => formatTime(d.time as string, showDateInAxis.value)),
-      axisLabel: {
-        fontSize: 11,
-        color: chartThemeColors.value.textSecondary,
-        margin: 12,
-      },
-      axisLine: {
-        show: true,
-        lineStyle: { color: chartThemeColors.value.borderColor, width: 1 },
-      },
+      axisLabel: { fontSize: 11, color: chartThemeColors.value.textSecondary, margin: 12 },
+      axisLine: { show: true, lineStyle: { color: chartThemeColors.value.borderColor, width: 1 } },
       axisTick: { show: false },
       boundaryGap: false,
     },
-    yAxis: {
-      type: 'value',
-      name: '延迟 (ms)',
-      nameTextStyle: { color: chartThemeColors.value.textSecondary },
-      axisLabel: { fontSize: 11, color: chartThemeColors.value.textSecondary, formatter: '{value}' },
-      axisLine: { show: false },
-      axisTick: { show: false },
-      splitLine: {
-        lineStyle: {
-          color: chartThemeColors.value.splitLineColor,
-          type: 'dashed' as const,
-        },
-      },
-    },
+    yAxis: combined
+      ? [valueAxis('latency', 'left'), valueAxis('loss', 'right')]
+      : [valueAxis(mode === 'loss' ? 'loss' : 'latency')],
     series,
   }
-})
+}
+
+const pingChartOption = computed(() => buildPingChartOption('combined'))
+const latencyChartOption = computed(() => buildPingChartOption('latency'))
+const lossChartOption = computed(() => buildPingChartOption('loss'))
+
+function focusTask(taskId: number): void {
+  selectedTaskIds.value = [taskId]
+}
+
+function downloadBlob(content: BlobPart, mime: string, filename: string): void {
+  const url = URL.createObjectURL(new Blob([content], { type: mime }))
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
+}
+
+function exportCsv(): void {
+  const headers = ['时间']
+  for (const task of selectedTasks.value)
+    headers.push(`${task.name} 延迟(ms)`, `${task.name} 丢包(%)`)
+  const rows = chartData.value.map((row) => {
+    const values: Array<string | number> = [row.time as string]
+    for (const task of selectedTasks.value) {
+      values.push(
+        row[`latency:${task.id}`] as number ?? '',
+        row[`loss:${task.id}`] as number ?? '',
+      )
+    }
+    return values
+  })
+  const escapeCsv = (value: string | number) => `"${String(value).replaceAll('"', '""')}"`
+  const csv = [headers, ...rows].map(row => row.map(escapeCsv).join(',')).join('\r\n')
+  downloadBlob(`\uFEFF${csv}`, 'text/csv;charset=utf-8', `komari-ping-${props.uuid}-${selectedHours.value}h.csv`)
+}
+
+function exportPng(): void {
+  const target = chartLayout.value === 'combined' ? combinedChartRef.value : latencyChartRef.value
+  const instance = target as { getDataURL?: (options?: Record<string, unknown>) => string } | null
+  const dataUrl = instance?.getDataURL?.({ type: 'png', pixelRatio: 2, backgroundColor: isDark.value ? '#111827' : '#ffffff' })
+  if (!dataUrl) {
+    window.$message?.warning('图表尚未准备好，请稍后再试')
+    return
+  }
+  const link = document.createElement('a')
+  link.href = dataUrl
+  link.download = `komari-ping-${props.uuid}-${selectedHours.value}h.png`
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+}
+
+function resetAutoRefreshTimer(): void {
+  if (autoRefreshTimer) {
+    clearInterval(autoRefreshTimer)
+    autoRefreshTimer = null
+  }
+  if (!autoRefresh.value)
+    return
+  autoRefreshTimer = setInterval(() => {
+    void fetchRecords()
+  }, appStore.themeSettings.pingChartRefreshInterval * 1000)
+}
 
 // ==================== 生命周期 ====================
 
@@ -722,12 +835,16 @@ watch(() => props.uuid, () => {
   fetchRecords()
 })
 
+watch(autoRefresh, resetAutoRefreshTimer)
+
 onMounted(() => {
-  const firstView = availableViews.value[0]
-  if (firstView && !selectedView.value) {
-    selectedView.value = firstView.label
-  }
   fetchRecords()
+  resetAutoRefreshTimer()
+})
+
+onUnmounted(() => {
+  if (autoRefreshTimer)
+    clearInterval(autoRefreshTimer)
 })
 </script>
 
@@ -794,6 +911,12 @@ onMounted(() => {
                 <div class="rounded h-4 w-1" :style="{ backgroundColor: task.color }" />
                 <span class="text-sm font-semibold truncate">{{ task.name }}</span>
                 <div class="flex-1" />
+                <Button
+                  variant="ghost" size="icon-xs" class="text-slate-500"
+                  title="仅查看此任务" @click.stop="focusTask(task.id)"
+                >
+                  <Icon icon="lucide:focus" :width="14" :height="14" />
+                </Button>
                 <DataTooltip placement="left" content-class="!rounded p-3 w-60 backdrop-blur">
                   <Button variant="ghost" size="icon-xs" class="text-slate-500" @click.stop>
                     <Icon icon="carbon:information" :width="14" :height="14" />
@@ -819,6 +942,10 @@ onMounted(() => {
                       <template v-if="task.p50 !== undefined">
                         <span class="text-muted-foreground">P50</span>
                         <span class="font-medium">{{ Math.round(task.p50) }} ms</span>
+                      </template>
+                      <template v-if="task.p95 !== null">
+                        <span class="text-muted-foreground">P95</span>
+                        <span class="font-medium">{{ Math.round(task.p95) }} ms</span>
                       </template>
                       <template v-if="task.p99 !== undefined">
                         <span class="text-muted-foreground">P99</span>
@@ -892,14 +1019,55 @@ onMounted(() => {
               </Button>
             </DataTooltip>
           </div>
+          <div class="flex items-center gap-1 rounded-md bg-background/60 p-0.5">
+            <Button
+              variant="ghost" size="xs" class="h-6 rounded-sm border-none"
+              :class="chartLayout === 'combined' && '!text-emerald-600 bg-background'" @click="chartLayout = 'combined'"
+            >
+              合图
+            </Button>
+            <Button
+              variant="ghost" size="xs" class="h-6 rounded-sm border-none"
+              :class="chartLayout === 'split' && '!text-emerald-600 bg-background'" @click="chartLayout = 'split'"
+            >
+              分图
+            </Button>
+          </div>
+          <Button
+            variant="ghost" size="xs" class="h-7 rounded-sm border-none bg-background/60 hover:bg-background"
+            :class="autoRefresh && '!text-emerald-600'" @click="autoRefresh = !autoRefresh"
+          >
+            <Icon :icon="autoRefresh ? 'lucide:pause' : 'lucide:play'" :width="13" :height="13" />
+            {{ autoRefresh ? '暂停刷新' : '自动刷新' }}
+          </Button>
+          <Button
+            variant="ghost" size="icon-xs" class="bg-background/60" title="立即刷新"
+            :disabled="loading" @click="fetchRecords"
+          >
+            <Icon icon="lucide:refresh-cw" :class="loading && 'animate-spin'" :width="14" :height="14" />
+          </Button>
+          <div class="flex-1" />
+          <Button variant="ghost" size="xs" class="h-7 bg-background/60" @click="exportPng">
+            <Icon icon="lucide:image-down" :width="13" :height="13" />
+            PNG
+          </Button>
+          <Button variant="ghost" size="xs" class="h-7 bg-background/60" @click="exportCsv">
+            <Icon icon="lucide:file-down" :width="13" :height="13" />
+            CSV
+          </Button>
         </div>
 
         <!-- 图表 -->
-        <div
-          class="h-80 rounded-md p-4 transition-all"
-          :class="pickSurfaceClass('bg-background/60 hover:bg-background', 'bg-background/50 hover:bg-background backdrop-blur-xl')"
-        >
-          <VChart :option="pingChartOption" autoresize />
+        <div v-if="chartLayout === 'combined'" class="h-88 rounded-md p-3 transition-all md:h-104" :class="pickSurfaceClass('bg-background/60 hover:bg-background', 'bg-background/50 hover:bg-background backdrop-blur-xl')">
+          <VChart ref="combinedChartRef" :option="pingChartOption" autoresize />
+        </div>
+        <div v-else class="grid gap-3">
+          <div class="h-72 rounded-md p-3 md:h-80" :class="pickSurfaceClass('bg-background/60 hover:bg-background', 'bg-background/50 hover:bg-background backdrop-blur-xl')">
+            <VChart ref="latencyChartRef" :option="latencyChartOption" autoresize />
+          </div>
+          <div class="h-72 rounded-md p-3 md:h-80" :class="pickSurfaceClass('bg-background/60 hover:bg-background', 'bg-background/50 hover:bg-background backdrop-blur-xl')">
+            <VChart ref="lossChartRef" :option="lossChartOption" autoresize />
+          </div>
         </div>
       </template>
     </Spinner>
