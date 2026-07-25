@@ -33,11 +33,35 @@ interface VisitorLog {
   path?: string
   route?: string
   user_agent?: string
+  geo?: VisitorGeo
+  geo_error?: string
 }
 
 interface VisitorLogResponse {
   visitors: VisitorLog[]
   total: number
+}
+
+interface VisitorGeo {
+  iso_code?: string
+  name?: string
+  region?: string
+  city?: string
+  postal_code?: string
+  timezone?: string
+  latitude?: string
+  longitude?: string
+  asn?: string
+  organization?: string
+  hostname?: string
+  provider?: string
+}
+
+interface VisitorSecuritySettings {
+  notification_enabled: boolean
+  notification_cooldown_minutes: number
+  notification_whitelist: string
+  ip_blocklist: string
 }
 
 type SettingsSection = 'home-ping' | 'visitors' | 'comparison' | 'chart' | 'appearance' | 'notice' | 'background' | 'filing'
@@ -81,6 +105,7 @@ const ANDROID_USER_AGENT_REGEX = /android/i
 const WINDOWS_USER_AGENT_REGEX = /windows/i
 const MAC_USER_AGENT_REGEX = /macintosh|mac os/i
 const LINUX_USER_AGENT_REGEX = /linux/i
+const IP_RULE_SPLIT_REGEX = /\s+/
 
 const activeSection = ref<SettingsSection>('home-ping')
 const loading = ref(true)
@@ -97,6 +122,16 @@ const visitorError = ref('')
 const visitorPage = ref(1)
 const visitorPageSize = 50
 const visitorTotal = ref(0)
+const visitorSecuritySaving = ref(false)
+const visitorSecurityLoaded = ref(false)
+const visitorSecuritySuccess = ref('')
+const pendingBlockVisitor = ref<VisitorLog | null>(null)
+const visitorSecurity = reactive<VisitorSecuritySettings>({
+  notification_enabled: false,
+  notification_cooldown_minutes: 1440,
+  notification_whitelist: '',
+  ip_blocklist: '',
+})
 const settings = reactive<ThemeSettings>({ ...DEFAULT_THEME_SETTINGS })
 const buildVersion = __BUILD_VERSION__
 const buildGitHash = __BUILD_GIT_HASH__
@@ -189,15 +224,100 @@ function summarizeUserAgent(value = ''): string {
   return `${device} · ${browser.replace('/', ' ')}`
 }
 
+function visitorLocationSummary(visitor: VisitorLog): string {
+  const geo = visitor.geo
+  if (!geo)
+    return visitor.geo_error || '归属地暂不可用'
+  const values = [geo.name, geo.region, geo.city].filter((value, index, items) => value && items.indexOf(value) === index)
+  return values.join(' / ') || '未知归属地'
+}
+
+function visitorGeoDetails(visitor: VisitorLog): string {
+  const geo = visitor.geo
+  if (!geo)
+    return visitor.geo_error || '归属地暂不可用'
+  return [
+    geo.postal_code && `邮编 ${geo.postal_code}`,
+    geo.timezone && `时区 ${geo.timezone}`,
+    geo.latitude && geo.longitude && `坐标 ${geo.latitude}, ${geo.longitude}`,
+    geo.asn && `ASN ${geo.asn}`,
+    geo.organization,
+    geo.hostname && `主机名 ${geo.hostname}`,
+    geo.provider && `数据源 ${geo.provider}`,
+  ].filter(Boolean).join(' · ') || '暂无更多信息'
+}
+
+function canManageVisitorIP(ip: string): boolean {
+  const value = ip.trim()
+  return Boolean(value && value !== '127.0.0.1' && value !== '::1' && value !== '<unknown>')
+}
+
+function appendIPRule(current: string, ip: string): string {
+  const rules = current.split(IP_RULE_SPLIT_REGEX).map(value => value.trim()).filter(Boolean)
+  if (!rules.includes(ip))
+    rules.push(ip)
+  return rules.join('\n')
+}
+
+async function loadVisitorSecuritySettings(): Promise<void> {
+  const result = await rpcCall<VisitorSecuritySettings>('admin:getVisitorSecuritySettings', {})
+  Object.assign(visitorSecurity, result)
+  visitorSecurityLoaded.value = true
+}
+
+async function saveVisitorSecuritySettings(successMessage = '访客安全设置已保存'): Promise<void> {
+  visitorSecuritySaving.value = true
+  visitorError.value = ''
+  visitorSecuritySuccess.value = ''
+  try {
+    const result = await rpcCall<VisitorSecuritySettings>('admin:updateVisitorSecuritySettings', {
+      ...visitorSecurity,
+    })
+    Object.assign(visitorSecurity, result)
+    visitorSecuritySuccess.value = successMessage
+  }
+  catch (cause) {
+    visitorError.value = cause instanceof Error ? cause.message : '访客安全设置保存失败'
+  }
+  finally {
+    visitorSecuritySaving.value = false
+  }
+}
+
+async function whitelistVisitor(visitor: VisitorLog): Promise<void> {
+  if (!canManageVisitorIP(visitor.ip))
+    return
+  visitorSecurity.notification_whitelist = appendIPRule(visitorSecurity.notification_whitelist, visitor.ip)
+  await saveVisitorSecuritySettings(`已将 ${visitor.ip} 加入免通知白名单`)
+}
+
+async function blockVisitor(visitor: VisitorLog): Promise<void> {
+  if (!canManageVisitorIP(visitor.ip))
+    return
+  pendingBlockVisitor.value = visitor
+}
+
+async function confirmBlockVisitor(): Promise<void> {
+  const visitor = pendingBlockVisitor.value
+  if (!visitor)
+    return
+  pendingBlockVisitor.value = null
+  visitorSecurity.ip_blocklist = appendIPRule(visitorSecurity.ip_blocklist, visitor.ip)
+  await saveVisitorSecuritySettings(`已封禁 ${visitor.ip}`)
+}
+
 async function loadVisitorLogs(page = visitorPage.value): Promise<void> {
   visitorLoading.value = true
   visitorError.value = ''
   try {
     const nextPage = Math.max(1, page)
-    const result = await rpcCall<VisitorLogResponse>('admin:getVisitorLogs', {
-      page: nextPage,
-      limit: visitorPageSize,
-    })
+    const [result] = await Promise.all([
+      rpcCall<VisitorLogResponse>('admin:getVisitorLogs', {
+        page: nextPage,
+        limit: visitorPageSize,
+      }),
+      visitorSecurityLoaded.value ? Promise.resolve() : loadVisitorSecuritySettings(),
+    ])
     visitors.value = Array.isArray(result.visitors) ? result.visitors : []
     visitorTotal.value = Math.max(0, Number(result.total) || 0)
     visitorPage.value = Math.min(nextPage, Math.max(1, Math.ceil(visitorTotal.value / visitorPageSize)))
@@ -561,7 +681,7 @@ onMounted(loadSettings)
                   最近访客
                 </h2>
                 <p class="mt-1 text-sm text-muted-foreground">
-                  仅管理员可见。记录由服务器生成，保留 30 天；页面不会查询第三方 IP 服务。
+                  仅管理员可见。记录保留 30 天，归属地由服务器查询并缓存；IP 定位是数据库估算，不能精确到住址。
                 </p>
               </div>
               <button
@@ -577,6 +697,69 @@ onMounted(loadSettings)
 
             <div v-if="visitorError" class="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-600 dark:text-red-400">
               {{ visitorError }}
+            </div>
+            <div v-if="visitorSecuritySuccess" class="rounded-md border border-primary/30 bg-primary/10 px-3 py-2 text-sm text-primary">
+              {{ visitorSecuritySuccess }}
+            </div>
+
+            <div class="space-y-4 rounded-md border border-border bg-card p-4">
+              <div class="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h3 class="text-sm font-semibold">
+                    通知与访问控制
+                  </h3>
+                  <p class="mt-1 text-xs leading-5 text-muted-foreground">
+                    新 IP 首次来访时发送 Telegram；已登录管理员、私有地址和免通知白名单不会提醒。支持单个 IP 或 CIDR 网段，每行一条。
+                  </p>
+                </div>
+                <label class="flex items-center gap-2 text-sm">
+                  <input v-model="visitorSecurity.notification_enabled" type="checkbox" class="size-4 accent-primary">
+                  新访客 Telegram 通知
+                </label>
+              </div>
+
+              <div class="grid gap-4 lg:grid-cols-2">
+                <label class="space-y-1 text-sm">
+                  <span>同一 IP 提醒间隔（分钟）</span>
+                  <input
+                    v-model.number="visitorSecurity.notification_cooldown_minutes"
+                    type="number" min="1" max="10080"
+                    class="h-9 w-full rounded-md border border-border bg-background px-3"
+                  >
+                  <span class="block text-xs text-muted-foreground">默认 1440 分钟，即 24 小时内只提醒一次。</span>
+                </label>
+                <div class="rounded-md border border-border/70 bg-background px-3 py-2 text-xs leading-5 text-muted-foreground">
+                  封禁规则在内存中匹配，不会为每次访问查询数据库。当前管理员 IP 不能加入封禁名单，避免误锁后台。
+                </div>
+                <label class="space-y-1 text-sm">
+                  <span>免通知 IP 白名单</span>
+                  <textarea
+                    v-model="visitorSecurity.notification_whitelist" rows="6"
+                    placeholder="例如：203.0.113.8&#10;2001:db8::/32"
+                    class="w-full resize-y rounded-md border border-border bg-background p-3 font-mono text-xs"
+                  />
+                </label>
+                <label class="space-y-1 text-sm">
+                  <span>封禁 IP 名单</span>
+                  <textarea
+                    v-model="visitorSecurity.ip_blocklist" rows="6"
+                    placeholder="例如：198.51.100.25&#10;2001:db8:1::/48"
+                    class="w-full resize-y rounded-md border border-border bg-background p-3 font-mono text-xs"
+                  />
+                </label>
+              </div>
+
+              <div class="flex justify-end">
+                <button
+                  type="button"
+                  class="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                  :disabled="visitorSecuritySaving"
+                  @click="saveVisitorSecuritySettings()"
+                >
+                  <Icon :icon="visitorSecuritySaving ? 'lucide:loader-circle' : 'lucide:shield-check'" :class="visitorSecuritySaving && 'animate-spin'" width="16" height="16" />
+                  {{ visitorSecuritySaving ? '正在保存' : '保存访客安全设置' }}
+                </button>
+              </div>
             </div>
 
             <div class="overflow-hidden rounded-md border border-border bg-card">
@@ -596,24 +779,35 @@ onMounted(loadSettings)
                 暂无访客记录
               </div>
               <template v-else>
-                <div class="hidden grid-cols-[170px_150px_minmax(170px,1fr)_minmax(180px,1.2fr)] gap-3 border-b border-border bg-muted/40 px-4 py-2 text-xs font-medium text-muted-foreground md:grid">
+                <div class="hidden grid-cols-[150px_130px_minmax(160px,1fr)_minmax(180px,1.2fr)_minmax(150px,1fr)_72px] gap-3 border-b border-border bg-muted/40 px-4 py-2 text-xs font-medium text-muted-foreground lg:grid">
                   <span>访问时间</span>
                   <span>来源 IP</span>
+                  <span>归属地与网络</span>
                   <span>访问页面</span>
                   <span>设备与浏览器</span>
+                  <span>操作</span>
                 </div>
                 <div
                   v-for="visitor in visitors"
                   :key="visitor.id"
-                  class="grid gap-2 border-b border-border/70 px-4 py-3 text-sm last:border-b-0 md:grid-cols-[170px_150px_minmax(170px,1fr)_minmax(180px,1.2fr)] md:items-center md:gap-3"
+                  class="grid gap-2 border-b border-border/70 px-4 py-3 text-sm last:border-b-0 lg:grid-cols-[150px_130px_minmax(160px,1fr)_minmax(180px,1.2fr)_minmax(150px,1fr)_72px] lg:items-center lg:gap-3"
                 >
                   <div class="tabular-nums">
-                    <span class="mr-2 text-xs text-muted-foreground md:hidden">时间</span>
+                    <span class="mr-2 text-xs text-muted-foreground lg:hidden">时间</span>
                     {{ formatVisitorTime(visitor.time) }}
                   </div>
                   <div class="min-w-0 truncate font-mono text-xs" :title="visitor.ip">
-                    <span class="mr-2 font-sans text-xs text-muted-foreground md:hidden">IP</span>
+                    <span class="mr-2 font-sans text-xs text-muted-foreground lg:hidden">IP</span>
                     {{ visitor.ip || '未知' }}
+                  </div>
+                  <div class="min-w-0">
+                    <div class="flex min-w-0 items-center gap-1.5">
+                      <Icon icon="lucide:map-pin" class="shrink-0 text-primary" width="14" height="14" />
+                      <span class="truncate" :title="visitorLocationSummary(visitor)">{{ visitorLocationSummary(visitor) }}</span>
+                    </div>
+                    <div class="mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground" :title="visitorGeoDetails(visitor)">
+                      {{ visitorGeoDetails(visitor) }}
+                    </div>
                   </div>
                   <div class="min-w-0">
                     <div class="truncate" :title="visitor.path || visitor.route || visitor.event">
@@ -625,6 +819,26 @@ onMounted(loadSettings)
                   </div>
                   <div class="min-w-0 truncate text-muted-foreground" :title="visitor.user_agent || '无 User-Agent'">
                     {{ summarizeUserAgent(visitor.user_agent) }}
+                  </div>
+                  <div class="flex items-center gap-1">
+                    <button
+                      type="button"
+                      class="inline-flex size-8 items-center justify-center rounded-md border border-border bg-background hover:bg-muted disabled:cursor-not-allowed disabled:opacity-30"
+                      title="加入免通知白名单"
+                      :disabled="visitorSecuritySaving || !canManageVisitorIP(visitor.ip)"
+                      @click="whitelistVisitor(visitor)"
+                    >
+                      <Icon icon="lucide:bell-off" width="15" height="15" />
+                    </button>
+                    <button
+                      type="button"
+                      class="inline-flex size-8 items-center justify-center rounded-md border border-red-500/30 bg-red-500/5 text-red-600 hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-30 dark:text-red-400"
+                      title="封禁此 IP"
+                      :disabled="visitorSecuritySaving || !canManageVisitorIP(visitor.ip)"
+                      @click="blockVisitor(visitor)"
+                    >
+                      <Icon icon="lucide:shield-ban" width="15" height="15" />
+                    </button>
                   </div>
                 </div>
               </template>
@@ -858,6 +1072,39 @@ onMounted(loadSettings)
           </div>
         </div>
       </section>
+    </div>
+
+    <div
+      v-if="pendingBlockVisitor"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="block-visitor-title"
+      @click.self="pendingBlockVisitor = null"
+    >
+      <div class="w-full max-w-md rounded-md border border-border bg-card p-5 text-card-foreground shadow-xl">
+        <div class="flex items-start gap-3">
+          <div class="flex size-9 shrink-0 items-center justify-center rounded-md bg-red-500/10 text-red-600 dark:text-red-400">
+            <Icon icon="lucide:shield-alert" width="19" height="19" />
+          </div>
+          <div class="min-w-0">
+            <h2 id="block-visitor-title" class="text-base font-semibold">
+              确认封禁此 IP
+            </h2>
+            <p class="mt-2 text-sm leading-6 text-muted-foreground">
+              封禁后，<span class="break-all font-mono text-foreground">{{ pendingBlockVisitor.ip }}</span> 将无法访问本站。规则仍可在封禁名单中删除。
+            </p>
+          </div>
+        </div>
+        <div class="mt-5 flex justify-end gap-2">
+          <button type="button" class="h-9 rounded-md border border-border bg-background px-4 text-sm hover:bg-muted" @click="pendingBlockVisitor = null">
+            取消
+          </button>
+          <button type="button" class="h-9 rounded-md bg-red-600 px-4 text-sm font-medium text-white hover:bg-red-700" @click="confirmBlockVisitor">
+            确认封禁
+          </button>
+        </div>
+      </div>
     </div>
   </main>
 </template>

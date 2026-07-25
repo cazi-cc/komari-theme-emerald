@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Icon } from '@iconify/vue'
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 
 interface VisitorClientData {
   device: string
@@ -28,11 +28,12 @@ const CHROME_REGEX = /Chrome/i
 const client = detectClient()
 const visitTime = formatVisitTime(new Date())
 const expand = ref(false)
+const ownIP = ref('正在获取本机公网 IP')
 
 const visitorRows = computed<VisitorInfoRow[]>(() => [
   {
-    value: '本次访问',
-    icon: 'tabler:shield-lock',
+    value: ownIP.value,
+    icon: 'tabler:world-www',
   },
   {
     value: client.device,
@@ -95,6 +96,20 @@ function detectClient(): VisitorClientData {
 
   return { device, browser }
 }
+
+async function loadOwnIP(): Promise<void> {
+  try {
+    const response = await fetch('/api/me', { credentials: 'same-origin', cache: 'no-store' })
+    const payload = await response.json() as { data?: { ip?: string }, ip?: string }
+    const ip = payload.data?.ip || payload.ip
+    ownIP.value = ip?.trim() || '公网 IP 暂不可用'
+  }
+  catch {
+    ownIP.value = '公网 IP 暂不可用'
+  }
+}
+
+onMounted(loadOwnIP)
 </script>
 
 <template>
@@ -106,7 +121,7 @@ function detectClient(): VisitorClientData {
           ? 'rounded-lg -translate-y-1 bg-background/38 shadow-[-1px_-1px_0_background,0_10px_28px_rgba(0,0,0,0.08)]'
           : 'rounded-xl',
       ]"
-      title="仅在本机识别设备与浏览器，不查询外部 IP 服务"
+      title="公网 IP 由本站返回，仅显示给当前访问者；设备信息在本机识别"
       @click="expand = !expand"
     >
       <TransitionGroup
