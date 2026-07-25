@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 SCORE_MODEL_VERSION = 2
 THEME_SHORT = "Emerald-Cazi"
 WINDOW_GROUPS = {
@@ -199,6 +199,12 @@ def rpc_batch(endpoint: str, hours: int, entity_ids: list[str], timeout: int) ->
     requests = [
         {
             "jsonrpc": "2.0",
+            "id": "p005",
+            "method": "public:queryMetrics",
+            "params": {**common, "metric_keys": ["ping.latency_ms"], "aggregation": "p0.5"},
+        },
+        {
+            "jsonrpc": "2.0",
             "id": "p50",
             "method": "public:queryMetrics",
             "params": {**common, "metric_keys": ["ping.latency_ms"], "aggregation": "p50"},
@@ -208,6 +214,12 @@ def rpc_batch(endpoint: str, hours: int, entity_ids: list[str], timeout: int) ->
             "id": "p95",
             "method": "public:queryMetrics",
             "params": {**common, "metric_keys": ["ping.latency_ms"], "aggregation": "p95"},
+        },
+        {
+            "jsonrpc": "2.0",
+            "id": "p995",
+            "method": "public:queryMetrics",
+            "params": {**common, "metric_keys": ["ping.latency_ms"], "aggregation": "p99.5"},
         },
         {
             "jsonrpc": "2.0",
@@ -236,7 +248,7 @@ def rpc_batch(endpoint: str, hours: int, entity_ids: list[str], timeout: int) ->
         result = item.get("result")
         if isinstance(result, dict):
             results[request_id] = result
-    missing = {"p50", "p95", "loss"} - results.keys()
+    missing = {"p005", "p50", "p95", "p995", "loss"} - results.keys()
     if missing:
         raise RuntimeError(f"Komari RPC response is missing: {', '.join(sorted(missing))}")
     return results
@@ -362,8 +374,10 @@ def build_window(
     results: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
     generated = utc_now()
+    p005_points = metric_points(results["p005"])
     p50_points = metric_points(results["p50"])
     p95_points = metric_points(results["p95"])
+    p995_points = metric_points(results["p995"])
     loss_points = metric_points(results["loss"])
     client_map = {client["uuid"]: client for client in clients}
     task_output = []
@@ -376,15 +390,23 @@ def build_window(
             if not client:
                 continue
             key = (uuid, task["id"])
+            p005_point = p005_points.get(key)
             p50_point = p50_points.get(key)
             p95_point = p95_points.get(key)
+            p995_point = p995_points.get(key)
             loss_point = loss_points.get(key)
+            p005 = finite_number(p005_point.get("value"), 0) if p005_point else None
             p50 = finite_number(p50_point.get("value"), 0) if p50_point else None
             p95 = finite_number(p95_point.get("value"), 0) if p95_point else None
+            p995 = finite_number(p995_point.get("value"), 0) if p995_point else None
+            if p005 is not None and p005 < 0:
+                p005 = None
             if p50 is not None and p50 < 0:
                 p50 = None
             if p95 is not None and p95 < 0:
                 p95 = None
+            if p995 is not None and p995 < 0:
+                p995 = None
             samples = int((loss_point or p50_point or {}).get("count") or 0)
             loss_fraction = clamp(finite_number(loss_point.get("value"), 0), 0, 1) if loss_point else 0.0
             loss_percent = loss_fraction * 100
@@ -406,8 +428,10 @@ def build_window(
                     **({"unranked_reason": reason} if reason else {}),
                     "score": None,
                     "grade": "未评级",
+                    "p005": round(p005, 4) if p005 is not None else None,
                     "p50": round(p50, 4) if p50 is not None else None,
                     "p95": round(p95, 4) if p95 is not None else None,
+                    "p995": round(p995, 4) if p995 is not None else None,
                     "loss_percent": round(loss_percent, 6),
                     "loss_count": loss_count,
                     "samples": samples,

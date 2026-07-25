@@ -95,13 +95,21 @@ const sortedNodes = computed(() => {
   })
 })
 
+function nodeRangeLower(node: NetworkComparisonNode): number | null {
+  return node.p005 ?? node.p50
+}
+
+function nodeRangeUpper(node: NetworkComparisonNode): number | null {
+  return node.p995 ?? node.p95
+}
+
 const chartNodes = computed(() => sortedNodes.value.filter(node => node.p50 !== null && node.p95 !== null))
 const scoredNodes = computed(() => sortedNodes.value.filter(node => node.rank !== null && node.score !== null))
 const lossFreeNodeCount = computed(() => sortedNodes.value.filter(node => node.samples > 0 && node.loss_count === 0).length)
 const bestNode = computed(() => scoredNodes.value[0] ?? null)
 const rangeAxisBounds = computed(() => {
-  const minimum = Math.min(...chartNodes.value.map(node => node.p50 ?? 0))
-  const maximum = Math.max(...chartNodes.value.map(node => node.p95 ?? 0))
+  const minimum = Math.min(...chartNodes.value.map(node => nodeRangeLower(node) ?? 0))
+  const maximum = Math.max(...chartNodes.value.map(node => nodeRangeUpper(node) ?? 0))
   if (!Number.isFinite(minimum) || !Number.isFinite(maximum))
     return { min: 0, max: 100 }
   const span = Math.max(10, maximum - minimum)
@@ -255,11 +263,13 @@ const rangeChartOption = computed(() => ({
       if (!node)
         return ''
       const remark = nodePublicRemark(node.uuid) || '暂无公开备注'
-      const spread = Math.max(0, (node.p95 ?? 0) - (node.p50 ?? 0))
-      return `<div style="max-width:260px;white-space:normal"><strong>${escapeHtml(node.name)}</strong><br><span style="opacity:.72">公开备注&nbsp;&nbsp;${escapeHtml(remark)}</span><br>P50&nbsp;&nbsp;${Math.round(node.p50 ?? 0)} ms<br>P95&nbsp;&nbsp;${Math.round(node.p95 ?? 0)} ms<br>区间差&nbsp;&nbsp;${spread.toFixed(1)} ms</div>`
+      const lower = nodeRangeLower(node) ?? node.p50 ?? 0
+      const upper = nodeRangeUpper(node) ?? node.p95 ?? 0
+      const spread = Math.max(0, upper - lower)
+      return `<div style="max-width:260px;white-space:normal"><strong>${escapeHtml(node.name)}</strong><br><span style="opacity:.72">公开备注&nbsp;&nbsp;${escapeHtml(remark)}</span><br>P0.5&nbsp;&nbsp;${Math.round(lower)} ms<br>P50&nbsp;&nbsp;${Math.round(node.p50 ?? 0)} ms<br>P95&nbsp;&nbsp;${Math.round(node.p95 ?? 0)} ms<br>P99.5&nbsp;&nbsp;${Math.round(upper)} ms<br>主要波动跨度&nbsp;&nbsp;${spread.toFixed(1)} ms</div>`
     },
   },
-  grid: { top: 12, right: 24, bottom: 30, left: 118, containLabel: false },
+  grid: { top: 12, right: 56, bottom: 30, left: 118, containLabel: false },
   xAxis: {
     type: 'value',
     min: rangeAxisBounds.value.min,
@@ -278,38 +288,57 @@ const rangeChartOption = computed(() => ({
     axisTick: { show: false },
   },
   series: [{
-    name: 'P50-P95 区间',
+    name: 'P0.5-P99.5 主要波动区间',
     type: 'custom',
     renderItem: (_params: RangeRenderParams, api: RangeRenderApi) => {
       const categoryIndex = Number(api.value(0))
-      const p50 = Number(api.value(1))
-      const p95 = Number(api.value(2))
-      const start = api.coord([p50, categoryIndex])
-      const end = api.coord([p95, categoryIndex])
-      const label = `${Math.round(p50)}–${Math.round(p95)} ms`
+      const lower = Number(api.value(1))
+      const p50 = Number(api.value(2))
+      const p95 = Number(api.value(3))
+      const upper = Number(api.value(4))
+      const lowerPoint = api.coord([lower, categoryIndex])
+      const p50Point = api.coord([p50, categoryIndex])
+      const p95Point = api.coord([p95, categoryIndex])
+      const upperPoint = api.coord([upper, categoryIndex])
+      const label = `${Math.round(lower)}–${Math.round(upper)} ms`
       return {
         type: 'group',
         children: [
           {
             type: 'line',
-            shape: { x1: start[0], y1: start[1], x2: end[0], y2: end[1] },
-            style: { stroke: '#34D399', lineWidth: 4, lineCap: 'round' },
+            shape: { x1: lowerPoint[0], y1: lowerPoint[1], x2: upperPoint[0], y2: upperPoint[1] },
+            style: { stroke: chartTextColor.value, opacity: 0.42, lineWidth: 3, lineCap: 'round' },
+          },
+          {
+            type: 'line',
+            shape: { x1: p50Point[0], y1: p50Point[1], x2: p95Point[0], y2: p95Point[1] },
+            style: { stroke: '#34D399', lineWidth: 5, lineCap: 'round' },
           },
           {
             type: 'circle',
-            shape: { cx: start[0], cy: start[1], r: 5 },
+            shape: { cx: lowerPoint[0], cy: lowerPoint[1], r: 3 },
+            style: { fill: chartTextColor.value },
+          },
+          {
+            type: 'circle',
+            shape: { cx: upperPoint[0], cy: upperPoint[1], r: 3 },
+            style: { fill: chartTextColor.value },
+          },
+          {
+            type: 'circle',
+            shape: { cx: p50Point[0], cy: p50Point[1], r: 5 },
             style: { fill: '#5EEAA6', stroke: '#047857', lineWidth: 1 },
           },
           {
             type: 'circle',
-            shape: { cx: end[0], cy: end[1], r: 5 },
+            shape: { cx: p95Point[0], cy: p95Point[1], r: 5 },
             style: { fill: rangeEndpointFill.value, stroke: '#34D399', lineWidth: 2 },
           },
           {
             type: 'text',
             style: {
-              x: end[0] + 9,
-              y: end[1],
+              x: upperPoint[0] + 9,
+              y: upperPoint[1],
               text: label,
               fill: chartTextColor.value,
               fontSize: 10,
@@ -320,8 +349,14 @@ const rangeChartOption = computed(() => ({
         ],
       }
     },
-    encode: { x: [1, 2], y: 0 },
-    data: chartNodes.value.map((node, index) => [index, node.p50, node.p95]),
+    encode: { x: [1, 2, 3, 4], y: 0 },
+    data: chartNodes.value.map((node, index) => [
+      index,
+      nodeRangeLower(node),
+      node.p50,
+      node.p95,
+      nodeRangeUpper(node),
+    ]),
   }],
 }))
 
@@ -637,10 +672,10 @@ onMounted(() => {
               >
                 <div>
                   <h2 class="text-sm font-semibold">
-                    P50-P95 延迟区间
+                    延迟主要波动区间
                   </h2>
                   <p class="mt-1 text-[11px] text-muted-foreground">
-                    实心点为 P50，环形点为 P95；连线越短且整体越靠左越稳定。
+                    灰线覆盖 P0.5-P99.5，排除两端极少数异常；绿色段为 P50-P95。
                   </p>
                 </div>
                 <div class="mt-2 h-76 min-w-0">

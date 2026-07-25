@@ -20,8 +20,10 @@ export interface NetworkComparisonNode {
   unranked_reason?: string
   score: number | null
   grade: string
+  p005?: number | null
   p50: number | null
   p95: number | null
+  p995?: number | null
   loss_percent: number
   loss_count: number
   samples: number

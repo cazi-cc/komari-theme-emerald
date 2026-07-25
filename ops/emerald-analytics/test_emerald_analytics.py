@@ -91,14 +91,48 @@ class ScoringModelTests(unittest.TestCase):
             ],
             analytics.scoring_config({}),
             {
+                "p005": {"series": []},
                 "p50": {"series": []},
                 "p95": {"series": []},
+                "p995": {"series": []},
                 "loss": {"series": []},
             },
         )
 
-        self.assertEqual(window["schema_version"], 3)
+        self.assertEqual(window["schema_version"], 4)
         self.assertNotIn("target", window["tasks"][0])
+
+    def test_public_window_includes_robust_full_latency_range(self):
+        def result(value):
+            return {
+                "series": [
+                    {
+                        "entity_id": "node-a",
+                        "tags": {"task_id": "1"},
+                        "points": [{"value": value, "count": 120}],
+                    }
+                ]
+            }
+
+        window = analytics.build_window(
+            1,
+            [{"uuid": "node-a", "name": "Node A", "region": "SG"}],
+            [{"id": 1, "name": "Task", "type": "icmp", "interval": 30, "clients": ["node-a"]}],
+            analytics.scoring_config({}),
+            {
+                "p005": result(21.25),
+                "p50": result(32.5),
+                "p95": result(48.75),
+                "p995": result(91.0),
+                "loss": result(0.0),
+            },
+        )
+
+        node = window["tasks"][0]["nodes"][0]
+        self.assertEqual(node["p005"], 21.25)
+        self.assertEqual(node["p50"], 32.5)
+        self.assertEqual(node["p95"], 48.75)
+        self.assertEqual(node["p995"], 91.0)
 
 
 if __name__ == "__main__":
