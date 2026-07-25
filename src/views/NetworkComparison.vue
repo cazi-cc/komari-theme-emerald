@@ -4,6 +4,7 @@ import type {
   NetworkComparisonNode,
   NetworkComparisonTask,
   NetworkComparisonWindow,
+  NetworkProbeDiagnostic,
   NetworkTrendSeries,
 } from '@/utils/networkComparison'
 import { Icon } from '@iconify/vue'
@@ -26,6 +27,7 @@ import {
   loadNetworkComparisonManifest,
   loadNetworkComparisonWindow,
   loadNetworkTrend,
+  loadProbeDiagnostics,
 } from '@/utils/networkComparison'
 import '@/utils/echarts'
 
@@ -57,6 +59,10 @@ const trendLoading = ref(false)
 const trendError = ref('')
 const trendSeries = ref<NetworkTrendSeries[]>([])
 const trendLoadedKey = ref('')
+const diagnosticLoading = ref(false)
+const diagnosticError = ref('')
+const diagnostics = ref<NetworkProbeDiagnostic[]>([])
+const diagnosticLoadedKey = ref('')
 let windowRequestId = 0
 
 const hourLabels = new Map([
@@ -125,6 +131,9 @@ const isCacheStale = computed(() => {
 })
 const trendKey = computed(() => `${selectedHours.value}:${selectedTaskId.value ?? ''}`)
 const isTrendLoaded = computed(() => trendLoadedKey.value === trendKey.value && trendSeries.value.length > 0)
+const diagnosticKey = computed(() => `${selectedHours.value}:${selectedTaskId.value ?? ''}`)
+const isDiagnosticLoaded = computed(() => diagnosticLoadedKey.value === diagnosticKey.value)
+const diagnosticMap = computed(() => new Map(diagnostics.value.map(item => [item.uuid, item])))
 const nodeStateMap = computed(() => new Map(nodesStore.nodes.map(node => [node.uuid, node])))
 const isDark = computed(() => appStore.isDark)
 const chartTextColor = computed(() => isDark.value ? 'rgba(255,255,255,.68)' : 'rgba(15,23,42,.66)')
@@ -171,6 +180,32 @@ function nodeLossText(node: NetworkComparisonNode): string {
 
 function nodeOnline(uuid: string): boolean | null {
   return nodeStateMap.value.get(uuid)?.online ?? null
+}
+
+function formatDiagnosticPercent(value: number | null): string {
+  if (value === null)
+    return '--'
+  if (value >= 99.95)
+    return '100%'
+  return `${value.toFixed(value < 10 ? 2 : 1)}%`
+}
+
+function formatDiagnosticMs(value: number | null): string {
+  if (value === null)
+    return '--'
+  return `${value.toFixed(value < 10 ? 1 : 0)} ms`
+}
+
+function formatDiagnosticRange(diagnostic: NetworkProbeDiagnostic | undefined): string {
+  if (!diagnostic || diagnostic.latencyMinMs === null || diagnostic.latencyMaxMs === null)
+    return '--'
+  return `${diagnostic.latencyMinMs.toFixed(0)}–${diagnostic.latencyMaxMs.toFixed(0)} ms`
+}
+
+function formatDiagnosticSamples(diagnostic: NetworkProbeDiagnostic | undefined): string {
+  if (!diagnostic || diagnostic.samplesSent === null)
+    return '--'
+  return `${Math.round(diagnostic.samplesReceived ?? 0)} / ${Math.round(diagnostic.samplesSent)}`
 }
 
 function ensureSelectedTask(): void {
@@ -249,6 +284,30 @@ async function fetchTrend(force = false): Promise<void> {
   }
   finally {
     trendLoading.value = false
+  }
+}
+
+async function fetchDiagnostics(force = false): Promise<void> {
+  const task = selectedTask.value
+  if (!task)
+    return
+
+  diagnosticLoading.value = true
+  diagnosticError.value = ''
+  try {
+    diagnostics.value = await loadProbeDiagnostics(
+      task.id,
+      selectedHours.value,
+      task.nodes.map(node => node.uuid),
+      force,
+    )
+    diagnosticLoadedKey.value = diagnosticKey.value
+  }
+  catch (cause) {
+    diagnosticError.value = cause instanceof Error ? cause.message : '探测诊断读取失败'
+  }
+  finally {
+    diagnosticLoading.value = false
   }
 }
 
@@ -472,6 +531,9 @@ const trendChartOption = computed(() => {
 watch(selectedHours, () => {
   trendSeries.value = []
   trendLoadedKey.value = ''
+  diagnostics.value = []
+  diagnosticLoadedKey.value = ''
+  diagnosticError.value = ''
   void loadWindow()
 })
 
@@ -479,6 +541,9 @@ watch(selectedTaskId, () => {
   trendSeries.value = []
   trendLoadedKey.value = ''
   trendError.value = ''
+  diagnostics.value = []
+  diagnosticLoadedKey.value = ''
+  diagnosticError.value = ''
 })
 
 watch(mobileSection, (section) => {
@@ -822,6 +887,132 @@ onMounted(() => {
                   </tr>
                 </tbody>
               </table>
+            </div>
+          </section>
+
+          <section
+            class="min-w-0 flex-col rounded-md bg-background/70 p-3 md:flex"
+            :class="mobileSection === 'details' ? 'flex' : 'hidden'"
+          >
+            <div class="flex flex-wrap items-center gap-2">
+              <div class="min-w-0 flex-1">
+                <h2 class="text-sm font-semibold">
+                  探测诊断
+                </h2>
+                <p class="mt-1 text-[11px] text-muted-foreground">
+                  读取后端已经汇总的分阶段与大小包指标；不会在访客打开页面时发起新探测。
+                </p>
+              </div>
+              <Button variant="outline" size="sm" :disabled="diagnosticLoading" @click="fetchDiagnostics(isDiagnosticLoaded)">
+                <Icon :icon="isDiagnosticLoaded ? 'lucide:refresh-cw' : 'lucide:stethoscope'" :class="diagnosticLoading && 'animate-spin'" />
+                {{ isDiagnosticLoaded ? '刷新诊断' : '加载探测诊断' }}
+              </Button>
+            </div>
+
+            <div v-if="diagnosticError" class="mt-4 rounded-md bg-red-500/10 px-3 py-4 text-center text-xs text-red-600">
+              {{ diagnosticError }}
+            </div>
+            <div v-else-if="!isDiagnosticLoaded && !diagnosticLoading" class="mt-4 flex min-h-32 flex-col items-center justify-center text-center text-sm text-muted-foreground">
+              <Icon icon="lucide:activity" :width="26" :height="26" class="mb-2 opacity-40" />
+              点击后读取当前任务的轻量汇总，不触发实时探测
+            </div>
+            <div v-else-if="isDiagnosticLoaded && diagnostics.length === 0" class="mt-4 rounded-md bg-muted/50 px-3 py-6 text-center text-xs text-muted-foreground">
+              当前任务还没有新版 Agent 上报的诊断指标。
+            </div>
+            <div v-else-if="isDiagnosticLoaded" class="mt-3 overflow-x-auto">
+              <table class="w-full min-w-[1180px] border-collapse text-left text-xs">
+                <thead>
+                  <tr class="border-b border-border text-muted-foreground">
+                    <th class="px-2 py-2 font-medium">
+                      节点
+                    </th>
+                    <th class="px-2 py-2 font-medium">
+                      网络可达
+                    </th>
+                    <th class="px-2 py-2 font-medium">
+                      状态合格
+                    </th>
+                    <th class="px-2 py-2 font-medium">
+                      最小–最大
+                    </th>
+                    <th class="px-2 py-2 font-medium">
+                      平均抖动
+                    </th>
+                    <th class="px-2 py-2 font-medium">
+                      DNS
+                    </th>
+                    <th class="px-2 py-2 font-medium">
+                      TCP
+                    </th>
+                    <th class="px-2 py-2 font-medium">
+                      TLS
+                    </th>
+                    <th class="px-2 py-2 font-medium">
+                      TTFB
+                    </th>
+                    <th class="px-2 py-2 font-medium">
+                      HTTP
+                    </th>
+                    <th class="px-2 py-2 font-medium">
+                      TCP 重传
+                    </th>
+                    <th class="px-2 py-2 font-medium">
+                      收到 / 发出
+                    </th>
+                    <th class="px-2 py-2 font-medium">
+                      包大小
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="node in sortedNodes" :key="`probe-${node.uuid}`" class="border-b border-border/60 last:border-0">
+                    <td class="max-w-56 px-2 py-2.5">
+                      <div class="truncate font-medium" :title="node.name">
+                        {{ node.name }}
+                      </div>
+                    </td>
+                    <td class="px-2 py-2.5 tabular-nums">
+                      {{ formatDiagnosticPercent(diagnosticMap.get(node.uuid)?.reachablePercent ?? null) }}
+                    </td>
+                    <td class="px-2 py-2.5 tabular-nums">
+                      {{ formatDiagnosticPercent(diagnosticMap.get(node.uuid)?.statusOkPercent ?? null) }}
+                    </td>
+                    <td class="px-2 py-2.5 tabular-nums">
+                      {{ formatDiagnosticRange(diagnosticMap.get(node.uuid)) }}
+                    </td>
+                    <td class="px-2 py-2.5 tabular-nums">
+                      {{ formatDiagnosticMs(diagnosticMap.get(node.uuid)?.jitterMs ?? null) }}
+                    </td>
+                    <td class="px-2 py-2.5 tabular-nums">
+                      {{ formatDiagnosticMs(diagnosticMap.get(node.uuid)?.dnsMs ?? null) }}
+                    </td>
+                    <td class="px-2 py-2.5 tabular-nums">
+                      {{ formatDiagnosticMs(diagnosticMap.get(node.uuid)?.connectMs ?? null) }}
+                    </td>
+                    <td class="px-2 py-2.5 tabular-nums">
+                      {{ formatDiagnosticMs(diagnosticMap.get(node.uuid)?.tlsMs ?? null) }}
+                    </td>
+                    <td class="px-2 py-2.5 tabular-nums">
+                      {{ formatDiagnosticMs(diagnosticMap.get(node.uuid)?.ttfbMs ?? null) }}
+                    </td>
+                    <td class="px-2 py-2.5 tabular-nums">
+                      {{ diagnosticMap.get(node.uuid)?.httpStatus === null || diagnosticMap.get(node.uuid)?.httpStatus === undefined ? '--' : Math.round(diagnosticMap.get(node.uuid)?.httpStatus ?? 0) }}
+                    </td>
+                    <td class="px-2 py-2.5 tabular-nums">
+                      {{ diagnosticMap.get(node.uuid)?.retransmissions === null || diagnosticMap.get(node.uuid)?.retransmissions === undefined ? '--' : Math.round(diagnosticMap.get(node.uuid)?.retransmissions ?? 0).toLocaleString() }}
+                    </td>
+                    <td class="px-2 py-2.5 tabular-nums">
+                      {{ formatDiagnosticSamples(diagnosticMap.get(node.uuid)) }}
+                    </td>
+                    <td class="px-2 py-2.5 tabular-nums">
+                      {{ diagnosticMap.get(node.uuid)?.packetSizeBytes === null || diagnosticMap.get(node.uuid)?.packetSizeBytes === undefined ? '--' : `${Math.round(diagnosticMap.get(node.uuid)?.packetSizeBytes ?? 0)} B` }}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+              <p class="mt-3 text-[11px] leading-5 text-muted-foreground">
+                “网络可达”表示 DNS、连接与响应链路可用；“状态合格”单独判断 HTTP 状态码。目标地址不会显示在这里，HTTP 403 等响应也不会再被当成网络丢包。
+              </p>
             </div>
           </section>
         </div>
