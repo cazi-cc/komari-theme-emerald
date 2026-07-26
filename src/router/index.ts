@@ -19,6 +19,11 @@ const router = createRouter({
       name: 'network-comparison',
       component: () => import('@/views/NetworkComparison.vue'),
     },
+    {
+      path: '/tcp-quality',
+      name: 'tcp-quality',
+      component: () => import('@/views/TCPQuality.vue'),
+    },
   ],
 })
 

@@ -1,6 +1,7 @@
 export const THEME_SHORT = 'Emerald-Cazi'
 export const MAX_HOME_PING_TASKS = 8
 export const NETWORK_SCORE_MODEL_VERSION = 2
+export const TCP_QUALITY_SCORE_MODEL_VERSION = 3
 
 export type PingChartLayout = 'combined' | 'split'
 
@@ -73,6 +74,35 @@ export interface ThemeSettings {
   networkScoreExcellentThreshold: number
   networkScoreGoodThreshold: number
   networkScoreFairThreshold: number
+  tcpQualityDefaultHours: number
+  tcpQualityScoreModelVersion: number
+  tcpOverallICMPWeight: number
+  tcpOverallStandardWeight: number
+  tcpOverallLargeWeight: number
+  tcpStandardLossWeight: number
+  tcpStandardP50Weight: number
+  tcpStandardP95Weight: number
+  tcpStandardCoverageWeight: number
+  tcpLargeLossWeight: number
+  tcpLargeExtraLossWeight: number
+  tcpLargeP95DegradationWeight: number
+  tcpLargeCoverageWeight: number
+  tcpProfileMeanWeight: number
+  tcpProfileP20Weight: number
+  tcpMinimumRuns: number
+  tcpMinimumStandardSamples: number
+  tcpMinimumLargeSamples: number
+  tcpMinimumTargetCoverage: number
+  tcpReferenceFailureThreshold: number
+  tcpGuardWarningLoss: number
+  tcpGuardWarningMaximumScore: number
+  tcpGuardCriticalLoss: number
+  tcpGuardCriticalMaximumScore: number
+  tcpGuardSevereLoss: number
+  tcpGuardSevereMaximumScore: number
+  tcpExcellentThreshold: number
+  tcpGoodThreshold: number
+  tcpFairThreshold: number
 }
 
 export const DEFAULT_THEME_SETTINGS: ThemeSettings = {
@@ -127,6 +157,35 @@ export const DEFAULT_THEME_SETTINGS: ThemeSettings = {
   networkScoreExcellentThreshold: 95,
   networkScoreGoodThreshold: 85,
   networkScoreFairThreshold: 70,
+  tcpQualityDefaultHours: 24,
+  tcpQualityScoreModelVersion: TCP_QUALITY_SCORE_MODEL_VERSION,
+  tcpOverallICMPWeight: 35,
+  tcpOverallStandardWeight: 55,
+  tcpOverallLargeWeight: 10,
+  tcpStandardLossWeight: 55,
+  tcpStandardP50Weight: 15,
+  tcpStandardP95Weight: 25,
+  tcpStandardCoverageWeight: 5,
+  tcpLargeLossWeight: 55,
+  tcpLargeExtraLossWeight: 25,
+  tcpLargeP95DegradationWeight: 15,
+  tcpLargeCoverageWeight: 5,
+  tcpProfileMeanWeight: 70,
+  tcpProfileP20Weight: 30,
+  tcpMinimumRuns: 3,
+  tcpMinimumStandardSamples: 90,
+  tcpMinimumLargeSamples: 30,
+  tcpMinimumTargetCoverage: 80,
+  tcpReferenceFailureThreshold: 70,
+  tcpGuardWarningLoss: 3,
+  tcpGuardWarningMaximumScore: 84.9,
+  tcpGuardCriticalLoss: 5,
+  tcpGuardCriticalMaximumScore: 69.9,
+  tcpGuardSevereLoss: 10,
+  tcpGuardSevereMaximumScore: 49.9,
+  tcpExcellentThreshold: 95,
+  tcpGoodThreshold: 85,
+  tcpFairThreshold: 70,
 }
 
 const HEX_COLOR_RE = /^#[0-9a-f]{6}$/i
@@ -196,16 +255,52 @@ function readColorMap(value: unknown): Record<string, string> {
   return result
 }
 
+function ensureNonZeroWeights(values: number[], fallback: number[]): number[] {
+  return values.every(weight => weight === 0) ? fallback : values
+}
+
 export function normalizeThemeSettings(value: unknown): ThemeSettings {
   const source = readObject(value)
   const usesCurrentScoreModel = source.networkScoreModelVersion === NETWORK_SCORE_MODEL_VERSION
   const scoreSource = usesCurrentScoreModel ? source : {}
+  const usesCurrentTCPScoreModel = source.tcpQualityScoreModelVersion === TCP_QUALITY_SCORE_MODEL_VERSION
+  const tcpScoreSource = usesCurrentTCPScoreModel ? source : {}
   const defaultHours = typeof source.pingChartDefaultHours === 'number' && VALID_CHART_HOURS.has(source.pingChartDefaultHours)
     ? source.pingChartDefaultHours
     : DEFAULT_THEME_SETTINGS.pingChartDefaultHours
   const fairThreshold = clampNumber(scoreSource.networkScoreFairThreshold, DEFAULT_THEME_SETTINGS.networkScoreFairThreshold, 0, 100)
   const goodThreshold = Math.max(fairThreshold, clampNumber(scoreSource.networkScoreGoodThreshold, DEFAULT_THEME_SETTINGS.networkScoreGoodThreshold, 0, 100))
   const excellentThreshold = Math.max(goodThreshold, clampNumber(scoreSource.networkScoreExcellentThreshold, DEFAULT_THEME_SETTINGS.networkScoreExcellentThreshold, 0, 100))
+  const tcpFairThreshold = clampNumber(tcpScoreSource.tcpFairThreshold, DEFAULT_THEME_SETTINGS.tcpFairThreshold, 0, 100)
+  const tcpGoodThreshold = Math.max(tcpFairThreshold, clampNumber(tcpScoreSource.tcpGoodThreshold, DEFAULT_THEME_SETTINGS.tcpGoodThreshold, 0, 100))
+  const tcpExcellentThreshold = Math.max(tcpGoodThreshold, clampNumber(tcpScoreSource.tcpExcellentThreshold, DEFAULT_THEME_SETTINGS.tcpExcellentThreshold, 0, 100))
+  const tcpGuardWarningLoss = clampNumber(tcpScoreSource.tcpGuardWarningLoss, DEFAULT_THEME_SETTINGS.tcpGuardWarningLoss, 0, 100)
+  const tcpGuardCriticalLoss = Math.max(tcpGuardWarningLoss, clampNumber(tcpScoreSource.tcpGuardCriticalLoss, DEFAULT_THEME_SETTINGS.tcpGuardCriticalLoss, 0, 100))
+  const tcpGuardSevereLoss = Math.max(tcpGuardCriticalLoss, clampNumber(tcpScoreSource.tcpGuardSevereLoss, DEFAULT_THEME_SETTINGS.tcpGuardSevereLoss, 0, 100))
+  const tcpGuardWarningMaximumScore = clampNumber(tcpScoreSource.tcpGuardWarningMaximumScore, DEFAULT_THEME_SETTINGS.tcpGuardWarningMaximumScore, 0, 100)
+  const tcpGuardCriticalMaximumScore = Math.min(tcpGuardWarningMaximumScore, clampNumber(tcpScoreSource.tcpGuardCriticalMaximumScore, DEFAULT_THEME_SETTINGS.tcpGuardCriticalMaximumScore, 0, 100))
+  const tcpGuardSevereMaximumScore = Math.min(tcpGuardCriticalMaximumScore, clampNumber(tcpScoreSource.tcpGuardSevereMaximumScore, DEFAULT_THEME_SETTINGS.tcpGuardSevereMaximumScore, 0, 100))
+  const tcpOverallWeights = ensureNonZeroWeights([
+    clampNumber(tcpScoreSource.tcpOverallICMPWeight, DEFAULT_THEME_SETTINGS.tcpOverallICMPWeight, 0, 100),
+    clampNumber(tcpScoreSource.tcpOverallStandardWeight, DEFAULT_THEME_SETTINGS.tcpOverallStandardWeight, 0, 100),
+    clampNumber(tcpScoreSource.tcpOverallLargeWeight, DEFAULT_THEME_SETTINGS.tcpOverallLargeWeight, 0, 100),
+  ], [DEFAULT_THEME_SETTINGS.tcpOverallICMPWeight, DEFAULT_THEME_SETTINGS.tcpOverallStandardWeight, DEFAULT_THEME_SETTINGS.tcpOverallLargeWeight])
+  const tcpStandardWeights = ensureNonZeroWeights([
+    clampNumber(tcpScoreSource.tcpStandardLossWeight, DEFAULT_THEME_SETTINGS.tcpStandardLossWeight, 0, 100),
+    clampNumber(tcpScoreSource.tcpStandardP50Weight, DEFAULT_THEME_SETTINGS.tcpStandardP50Weight, 0, 100),
+    clampNumber(tcpScoreSource.tcpStandardP95Weight, DEFAULT_THEME_SETTINGS.tcpStandardP95Weight, 0, 100),
+    clampNumber(tcpScoreSource.tcpStandardCoverageWeight, DEFAULT_THEME_SETTINGS.tcpStandardCoverageWeight, 0, 100),
+  ], [DEFAULT_THEME_SETTINGS.tcpStandardLossWeight, DEFAULT_THEME_SETTINGS.tcpStandardP50Weight, DEFAULT_THEME_SETTINGS.tcpStandardP95Weight, DEFAULT_THEME_SETTINGS.tcpStandardCoverageWeight])
+  const tcpLargeWeights = ensureNonZeroWeights([
+    clampNumber(tcpScoreSource.tcpLargeLossWeight, DEFAULT_THEME_SETTINGS.tcpLargeLossWeight, 0, 100),
+    clampNumber(tcpScoreSource.tcpLargeExtraLossWeight, DEFAULT_THEME_SETTINGS.tcpLargeExtraLossWeight, 0, 100),
+    clampNumber(tcpScoreSource.tcpLargeP95DegradationWeight, DEFAULT_THEME_SETTINGS.tcpLargeP95DegradationWeight, 0, 100),
+    clampNumber(tcpScoreSource.tcpLargeCoverageWeight, DEFAULT_THEME_SETTINGS.tcpLargeCoverageWeight, 0, 100),
+  ], [DEFAULT_THEME_SETTINGS.tcpLargeLossWeight, DEFAULT_THEME_SETTINGS.tcpLargeExtraLossWeight, DEFAULT_THEME_SETTINGS.tcpLargeP95DegradationWeight, DEFAULT_THEME_SETTINGS.tcpLargeCoverageWeight])
+  const tcpProfileWeights = ensureNonZeroWeights([
+    clampNumber(tcpScoreSource.tcpProfileMeanWeight, DEFAULT_THEME_SETTINGS.tcpProfileMeanWeight, 0, 100),
+    clampNumber(tcpScoreSource.tcpProfileP20Weight, DEFAULT_THEME_SETTINGS.tcpProfileP20Weight, 0, 100),
+  ], [DEFAULT_THEME_SETTINGS.tcpProfileMeanWeight, DEFAULT_THEME_SETTINGS.tcpProfileP20Weight])
 
   return {
     dataUpdateInterval: clampNumber(source.dataUpdateInterval, DEFAULT_THEME_SETTINGS.dataUpdateInterval, 1, 60),
@@ -268,5 +363,36 @@ export function normalizeThemeSettings(value: unknown): ThemeSettings {
     networkScoreExcellentThreshold: excellentThreshold,
     networkScoreGoodThreshold: goodThreshold,
     networkScoreFairThreshold: fairThreshold,
+    tcpQualityDefaultHours: typeof source.tcpQualityDefaultHours === 'number' && VALID_CHART_HOURS.has(source.tcpQualityDefaultHours)
+      ? source.tcpQualityDefaultHours
+      : DEFAULT_THEME_SETTINGS.tcpQualityDefaultHours,
+    tcpQualityScoreModelVersion: TCP_QUALITY_SCORE_MODEL_VERSION,
+    tcpOverallICMPWeight: tcpOverallWeights[0]!,
+    tcpOverallStandardWeight: tcpOverallWeights[1]!,
+    tcpOverallLargeWeight: tcpOverallWeights[2]!,
+    tcpStandardLossWeight: tcpStandardWeights[0]!,
+    tcpStandardP50Weight: tcpStandardWeights[1]!,
+    tcpStandardP95Weight: tcpStandardWeights[2]!,
+    tcpStandardCoverageWeight: tcpStandardWeights[3]!,
+    tcpLargeLossWeight: tcpLargeWeights[0]!,
+    tcpLargeExtraLossWeight: tcpLargeWeights[1]!,
+    tcpLargeP95DegradationWeight: tcpLargeWeights[2]!,
+    tcpLargeCoverageWeight: tcpLargeWeights[3]!,
+    tcpProfileMeanWeight: tcpProfileWeights[0]!,
+    tcpProfileP20Weight: tcpProfileWeights[1]!,
+    tcpMinimumRuns: Math.round(clampNumber(tcpScoreSource.tcpMinimumRuns, DEFAULT_THEME_SETTINGS.tcpMinimumRuns, 1, 20)),
+    tcpMinimumStandardSamples: Math.round(clampNumber(tcpScoreSource.tcpMinimumStandardSamples, DEFAULT_THEME_SETTINGS.tcpMinimumStandardSamples, 10, 10000)),
+    tcpMinimumLargeSamples: Math.round(clampNumber(tcpScoreSource.tcpMinimumLargeSamples, DEFAULT_THEME_SETTINGS.tcpMinimumLargeSamples, 10, 10000)),
+    tcpMinimumTargetCoverage: clampNumber(tcpScoreSource.tcpMinimumTargetCoverage, DEFAULT_THEME_SETTINGS.tcpMinimumTargetCoverage, 1, 100),
+    tcpReferenceFailureThreshold: clampNumber(tcpScoreSource.tcpReferenceFailureThreshold, DEFAULT_THEME_SETTINGS.tcpReferenceFailureThreshold, 50, 100),
+    tcpGuardWarningLoss,
+    tcpGuardWarningMaximumScore,
+    tcpGuardCriticalLoss,
+    tcpGuardCriticalMaximumScore,
+    tcpGuardSevereLoss,
+    tcpGuardSevereMaximumScore,
+    tcpExcellentThreshold,
+    tcpGoodThreshold,
+    tcpFairThreshold,
   }
 }

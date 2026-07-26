@@ -64,14 +64,29 @@ interface VisitorSecuritySettings {
   ip_blocklist: string
 }
 
-type SettingsSection = 'home-ping' | 'visitors' | 'comparison' | 'chart' | 'appearance' | 'notice' | 'background' | 'filing'
+type SettingsSection = 'home-ping' | 'visitors' | 'comparison' | 'tcp-quality' | 'chart' | 'appearance' | 'notice' | 'background' | 'filing'
 type StatusColorKey = 'pingExcellentColor' | 'pingGoodColor' | 'pingModerateColor' | 'pingWarningColor' | 'pingCriticalColor'
 type ScoreWeightKey = 'networkScoreLossWeight' | 'networkScoreP50Weight' | 'networkScoreP95Weight' | 'networkScoreVolatilityWeight' | 'networkScoreCoverageWeight'
+type TCPWeightKey
+  = | 'tcpOverallICMPWeight'
+    | 'tcpOverallStandardWeight'
+    | 'tcpOverallLargeWeight'
+    | 'tcpStandardLossWeight'
+    | 'tcpStandardP50Weight'
+    | 'tcpStandardP95Weight'
+    | 'tcpStandardCoverageWeight'
+    | 'tcpLargeLossWeight'
+    | 'tcpLargeExtraLossWeight'
+    | 'tcpLargeP95DegradationWeight'
+    | 'tcpLargeCoverageWeight'
+    | 'tcpProfileMeanWeight'
+    | 'tcpProfileP20Weight'
 
 const sections: Array<{ key: SettingsSection, label: string, icon: string }> = [
   { key: 'home-ping', label: '首页延迟任务', icon: 'lucide:list-ordered' },
   { key: 'visitors', label: '最近访客', icon: 'lucide:users' },
   { key: 'comparison', label: '线路对比', icon: 'lucide:route' },
+  { key: 'tcp-quality', label: 'TCP 质量', icon: 'lucide:gauge' },
   { key: 'chart', label: '详情图表', icon: 'lucide:chart-no-axes-combined' },
   { key: 'appearance', label: '页面与显示', icon: 'lucide:layout-dashboard' },
   { key: 'notice', label: '公告', icon: 'lucide:megaphone' },
@@ -91,6 +106,23 @@ const scoreWeightItems: Array<{ key: ScoreWeightKey, label: string, description:
   { key: 'networkScoreP95Weight', label: 'P95 延迟', description: '较慢请求的尾部延迟' },
   { key: 'networkScoreVolatilityWeight', label: '波动', description: '按固定尺度评估 P95 相对 P50 的增幅' },
   { key: 'networkScoreCoverageWeight', label: '覆盖率', description: '实际样本数与预期样本数之比' },
+]
+const tcpOverallWeightItems: Array<{ key: TCPWeightKey, label: string }> = [
+  { key: 'tcpOverallICMPWeight', label: 'ICMP 基础质量' },
+  { key: 'tcpOverallStandardWeight', label: 'TCP 标准 SYN' },
+  { key: 'tcpOverallLargeWeight', label: '实验性大小包' },
+]
+const tcpStandardWeightItems: Array<{ key: TCPWeightKey, label: string }> = [
+  { key: 'tcpStandardLossWeight', label: 'SYN 首包丢失' },
+  { key: 'tcpStandardP50Weight', label: 'P50 延迟' },
+  { key: 'tcpStandardP95Weight', label: 'P95 延迟' },
+  { key: 'tcpStandardCoverageWeight', label: '样本覆盖率' },
+]
+const tcpLargeWeightItems: Array<{ key: TCPWeightKey, label: string }> = [
+  { key: 'tcpLargeLossWeight', label: '大小包丢失' },
+  { key: 'tcpLargeExtraLossWeight', label: '相对标准包额外丢失' },
+  { key: 'tcpLargeP95DegradationWeight', label: 'P95 劣化比例' },
+  { key: 'tcpLargeCoverageWeight', label: '样本覆盖率' },
 ]
 const taskColorPalette = ['#FF6B6B', '#4ECDC4', '#A78BFA', '#60A5FA', '#FFB347', '#F472B6', '#34D399', '#FB923C']
 const EDGE_USER_AGENT_REGEX = /Edg\/[\d.]+/i
@@ -144,6 +176,9 @@ const maximumSelectedTaskCount = computed(() => Math.max(
   ...nodes.value.map(node => selectedTaskIds(node.uuid).length),
 ))
 const scoreWeightTotal = computed(() => scoreWeightItems.reduce((total, item) => total + settings[item.key], 0))
+const tcpOverallWeightTotal = computed(() => tcpOverallWeightItems.reduce((total, item) => total + settings[item.key], 0))
+const tcpStandardWeightTotal = computed(() => tcpStandardWeightItems.reduce((total, item) => total + settings[item.key], 0))
+const tcpLargeWeightTotal = computed(() => tcpLargeWeightItems.reduce((total, item) => total + settings[item.key], 0))
 const visitorPageCount = computed(() => Math.max(1, Math.ceil(visitorTotal.value / visitorPageSize)))
 const visitorRangeStart = computed(() => visitorTotal.value ? (visitorPage.value - 1) * visitorPageSize + 1 : 0)
 const visitorRangeEnd = computed(() => Math.min(visitorTotal.value, visitorPage.value * visitorPageSize))
@@ -437,6 +472,14 @@ function setStatusColor(key: StatusColorKey, event: Event): void {
   settings[key] = (event.target as HTMLInputElement).value
 }
 
+function resetTCPQualityScoreSettings(): void {
+  Object.assign(settings, normalizeThemeSettings({
+    ...settings,
+    tcpQualityDefaultHours: DEFAULT_THEME_SETTINGS.tcpQualityDefaultHours,
+    tcpQualityScoreModelVersion: 0,
+  }))
+}
+
 async function loadSettings(): Promise<void> {
   loading.value = true
   error.value = ''
@@ -483,7 +526,18 @@ async function saveSettings(): Promise<void> {
     if (!response.ok || (result as { status?: string } | null)?.status === 'error')
       throw new Error((result as { message?: string } | null)?.message || `保存失败：HTTP ${response.status}`)
 
-    success.value = '设置已保存，刷新监控首页后生效。'
+    if (activeSection.value === 'tcp-quality') {
+      try {
+        await rpcCall('admin:refreshTCPQualitySnapshots', {})
+        success.value = '设置已保存，TCP 质量评分缓存已按新参数重新计算。'
+      }
+      catch {
+        success.value = '设置已保存；后台将在下一次定时任务中刷新 TCP 质量评分缓存。'
+      }
+    }
+    else {
+      success.value = '设置已保存，刷新监控首页后生效。'
+    }
   }
   catch (cause) {
     error.value = cause instanceof Error ? cause.message : '设置保存失败'
@@ -945,6 +999,138 @@ onMounted(loadSettings)
 
             <div class="rounded-md border border-border bg-card p-4 text-xs leading-6 text-muted-foreground">
               排名数据由服务器后台定期计算并缓存。1 小时每 5 分钟更新，6 小时、12 小时和 1 天每 10 分钟更新，3 天和 7 天每 30 分钟更新；访客打开页面只读取缓存，不会重复执行全量统计。
+            </div>
+          </template>
+
+          <template v-else-if="activeSection === 'tcp-quality'">
+            <header class="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 class="text-base font-semibold">
+                  TCP 连接质量评分
+                </h2>
+                <p class="mt-1 text-sm text-muted-foreground">
+                  服务端后台预计算综合分；访客只读取缓存，不会触发 nping 或全量统计。
+                </p>
+              </div>
+              <button type="button" class="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-background px-3 text-sm hover:bg-muted" @click="resetTCPQualityScoreSettings">
+                <Icon icon="lucide:rotate-ccw" width="15" height="15" />
+                恢复推荐值
+              </button>
+            </header>
+
+            <div class="grid gap-4 rounded-md border border-border bg-card p-4 sm:grid-cols-2">
+              <label class="space-y-1 text-sm">
+                <span>分析页默认时间范围</span>
+                <select v-model.number="settings.tcpQualityDefaultHours" class="h-9 w-full rounded-md border border-border bg-background px-3">
+                  <option :value="1">1 小时</option><option :value="6">6 小时</option><option :value="12">12 小时</option>
+                  <option :value="24">1 天</option><option :value="72">3 天</option><option :value="168">7 天</option>
+                </select>
+              </label>
+              <div class="rounded-md bg-muted/60 px-3 py-2 text-xs leading-5 text-muted-foreground">
+                “SYN 首包丢失率”表示首次 TCP 建连请求没有收到响应。TcpQuality 将其称为重传率，但这里不会把它误写成操作系统实际统计到的 TCP 重传次数。
+              </div>
+            </div>
+
+            <div class="rounded-md border border-border bg-card p-4">
+              <div class="mb-3 flex items-center justify-between gap-3">
+                <div>
+                  <h3 class="text-sm font-semibold">
+                    综合评分权重
+                  </h3>
+                  <p class="mt-1 text-xs text-muted-foreground">
+                    未启用实验性大小包时，服务端只在 ICMP 与标准 SYN 之间重新归一化。
+                  </p>
+                </div>
+                <span class="rounded bg-primary/10 px-2 py-1 text-xs font-semibold text-primary tabular-nums">
+                  合计 {{ tcpOverallWeightTotal }}%
+                </span>
+              </div>
+              <div class="grid gap-3 sm:grid-cols-3">
+                <label v-for="item in tcpOverallWeightItems" :key="item.key" class="space-y-1 text-sm">
+                  <span>{{ item.label }}</span>
+                  <span class="relative block">
+                    <input v-model.number="settings[item.key]" type="number" min="0" max="100" step="1" class="h-9 w-full rounded-md border border-border bg-background px-3 pr-7 text-right tabular-nums">
+                    <span class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">%</span>
+                  </span>
+                </label>
+              </div>
+            </div>
+
+            <div class="grid gap-4 xl:grid-cols-2">
+              <div class="rounded-md border border-border bg-card p-4">
+                <div class="mb-3 flex items-center justify-between gap-3">
+                  <h3 class="text-sm font-semibold">
+                    标准 SYN 评分
+                  </h3>
+                  <span class="text-xs text-muted-foreground tabular-nums">合计 {{ tcpStandardWeightTotal }}%</span>
+                </div>
+                <div class="grid gap-3 sm:grid-cols-2">
+                  <label v-for="item in tcpStandardWeightItems" :key="item.key" class="space-y-1 text-sm">
+                    <span>{{ item.label }}</span>
+                    <input v-model.number="settings[item.key]" type="number" min="0" max="100" step="1" class="h-9 w-full rounded-md border border-border bg-background px-3 text-right tabular-nums">
+                  </label>
+                </div>
+              </div>
+              <div class="rounded-md border border-border bg-card p-4">
+                <div class="mb-3 flex items-center justify-between gap-3">
+                  <div>
+                    <h3 class="text-sm font-semibold">
+                      实验性大小包评分
+                    </h3>
+                    <p class="mt-1 text-[11px] text-muted-foreground">
+                      仅在任务启用大小包时参与综合分。
+                    </p>
+                  </div>
+                  <span class="text-xs text-muted-foreground tabular-nums">合计 {{ tcpLargeWeightTotal }}%</span>
+                </div>
+                <div class="grid gap-3 sm:grid-cols-2">
+                  <label v-for="item in tcpLargeWeightItems" :key="item.key" class="space-y-1 text-sm">
+                    <span>{{ item.label }}</span>
+                    <input v-model.number="settings[item.key]" type="number" min="0" max="100" step="1" class="h-9 w-full rounded-md border border-border bg-background px-3 text-right tabular-nums">
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <div class="rounded-md border border-border bg-card p-4">
+              <h3 class="mb-3 text-sm font-semibold">
+                多目标汇总与有效性门槛
+              </h3>
+              <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <label class="space-y-1 text-sm"><span>目标均值权重（%）</span><input v-model.number="settings.tcpProfileMeanWeight" type="number" min="0" max="100" class="h-9 w-full rounded-md border border-border bg-background px-3"></label>
+                <label class="space-y-1 text-sm"><span>较差目标 P20 权重（%）</span><input v-model.number="settings.tcpProfileP20Weight" type="number" min="0" max="100" class="h-9 w-full rounded-md border border-border bg-background px-3"></label>
+                <label class="space-y-1 text-sm"><span>最少完整运行次数</span><input v-model.number="settings.tcpMinimumRuns" type="number" min="1" max="20" class="h-9 w-full rounded-md border border-border bg-background px-3"></label>
+                <label class="space-y-1 text-sm"><span>目标最低覆盖率（%）</span><input v-model.number="settings.tcpMinimumTargetCoverage" type="number" min="1" max="100" class="h-9 w-full rounded-md border border-border bg-background px-3"></label>
+                <label class="space-y-1 text-sm"><span>标准 SYN 最少样本</span><input v-model.number="settings.tcpMinimumStandardSamples" type="number" min="10" max="10000" class="h-9 w-full rounded-md border border-border bg-background px-3"></label>
+                <label class="space-y-1 text-sm"><span>大小包最少样本</span><input v-model.number="settings.tcpMinimumLargeSamples" type="number" min="10" max="10000" class="h-9 w-full rounded-md border border-border bg-background px-3"></label>
+                <label class="space-y-1 text-sm sm:col-span-2"><span>同目标故障排除阈值（% 节点）</span><input v-model.number="settings.tcpReferenceFailureThreshold" type="number" min="50" max="100" class="h-9 w-full rounded-md border border-border bg-background px-3"></label>
+              </div>
+            </div>
+
+            <div class="rounded-md border border-border bg-card p-4">
+              <h3 class="mb-1 text-sm font-semibold">
+                丢失率封顶保护
+              </h3>
+              <p class="mb-3 text-xs text-muted-foreground">
+                即使其他指标很好，达到对应丢失率后也不能超过右侧分数，避免高延迟或高丢包节点被误评为优秀。
+              </p>
+              <div class="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-x-3 gap-y-2 text-sm">
+                <span class="text-xs text-muted-foreground">SYN 首包丢失率达到</span><span class="text-xs text-muted-foreground">综合分最高</span>
+                <input v-model.number="settings.tcpGuardWarningLoss" type="number" min="0" max="100" step="0.1" class="h-9 rounded-md border border-border bg-background px-3"><input v-model.number="settings.tcpGuardWarningMaximumScore" type="number" min="0" max="100" step="0.1" class="h-9 rounded-md border border-border bg-background px-3">
+                <input v-model.number="settings.tcpGuardCriticalLoss" type="number" min="0" max="100" step="0.1" class="h-9 rounded-md border border-border bg-background px-3"><input v-model.number="settings.tcpGuardCriticalMaximumScore" type="number" min="0" max="100" step="0.1" class="h-9 rounded-md border border-border bg-background px-3">
+                <input v-model.number="settings.tcpGuardSevereLoss" type="number" min="0" max="100" step="0.1" class="h-9 rounded-md border border-border bg-background px-3"><input v-model.number="settings.tcpGuardSevereMaximumScore" type="number" min="0" max="100" step="0.1" class="h-9 rounded-md border border-border bg-background px-3">
+              </div>
+            </div>
+
+            <div class="rounded-md border border-border bg-card p-4">
+              <h3 class="mb-3 text-sm font-semibold">
+                TCP 综合评级阈值
+              </h3>
+              <div class="grid gap-3 sm:grid-cols-3">
+                <label class="space-y-1 text-sm"><span>优秀起始分</span><input v-model.number="settings.tcpExcellentThreshold" type="number" min="0" max="100" class="h-9 w-full rounded-md border border-border bg-background px-3"></label>
+                <label class="space-y-1 text-sm"><span>良好起始分</span><input v-model.number="settings.tcpGoodThreshold" type="number" min="0" max="100" class="h-9 w-full rounded-md border border-border bg-background px-3"></label>
+                <label class="space-y-1 text-sm"><span>一般起始分</span><input v-model.number="settings.tcpFairThreshold" type="number" min="0" max="100" class="h-9 w-full rounded-md border border-border bg-background px-3"></label>
+              </div>
             </div>
           </template>
 

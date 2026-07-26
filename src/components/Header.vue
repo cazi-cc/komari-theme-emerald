@@ -17,6 +17,11 @@ const siteFavicon = ref('/favicon.ico')
 const actionButtons = computed(() => {
   const buttons = [
     {
+      title: 'TCP 质量',
+      icon: 'lucide:gauge',
+      action: 'tcpQuality',
+    },
+    {
       title: '线路对比',
       icon: 'lucide:route',
       action: 'networkComparison',
@@ -45,6 +50,9 @@ function handleButtonClick(action: string) {
       break
     case 'networkComparison':
       router.push({ name: 'network-comparison' })
+      break
+    case 'tcpQuality':
+      router.push({ name: 'tcp-quality' })
       break
     case 'jumpToSetting':
       location.href = '/admin'
