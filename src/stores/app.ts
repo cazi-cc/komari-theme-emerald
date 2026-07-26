@@ -133,6 +133,8 @@ const useAppStore = defineStore('app', () => {
     return true
   })
 
+  const visitorCountryCode = ref<string | null>(null)
+
   const hideAdminEntryWhenLoggedOut = computed<boolean>(() => {
     const settings = publicSettings.value?.theme_settings
     if (settings && typeof settings.hideAdminEntryWhenLoggedOut === 'boolean') {
@@ -326,6 +328,7 @@ const useAppStore = defineStore('app', () => {
     alertContent,
     earthViewMode,
     visitorInfoCardEnabled,
+    visitorCountryCode,
     hideAdminEntryWhenLoggedOut,
     disablePageAnimation,
     icpEnabled,

@@ -1,4 +1,5 @@
 import dayjs from 'dayjs'
+import { CURRENCY_SYMBOLS, normalizeCurrency } from '@/utils/financeHelper'
 
 /** 计费周期类型 */
 export type BillingCycleType = 'monthly' | 'quarterly' | 'semi_annual' | 'annual' | 'biennial' | 'triennial' | 'quinquennial' | 'once' | 'custom'
@@ -209,7 +210,7 @@ export function getExpireTextClass(expiredAt: string | number | undefined): stri
     return 'text-yellow-600 dark:text-yellow-400'
   if (status === 'long_term')
     return 'text-muted-foreground'
-  return 'text-emerald-600 dark:text-emerald-400'
+  return '' // text-emerald-600 dark:text-emerald-400
 }
 
 /**
@@ -329,35 +330,37 @@ export function parseTags(tags: string | undefined): Array<{ text: string, color
 /**
  * 格式化价格显示
  * @param price 价格
- * @param currency 货币符号
+ * @param currency 货币代码或符号
  * @param lang 语言
  * @returns 价格显示文本
  */
-export function formatPrice(price: number, currency: string = '￥', lang: 'zh-CN' | 'en-US' = 'zh-CN'): string {
+export function formatPrice(price: number, currency: string = 'CNY', lang: 'zh-CN' | 'en-US' = 'zh-CN'): string {
   if (price === 0)
     return lang === 'zh-CN' ? '免费' : 'Free'
   if (price === -1)
     return lang === 'zh-CN' ? '免费' : 'Free'
-  return `${currency}${price}`
+  const code = normalizeCurrency(currency)
+  const symbol = CURRENCY_SYMBOLS[code]
+  return `${symbol}${price}`
 }
 
 /**
  * 格式化价格和计费周期
  * @param price 价格
  * @param billingCycle 计费周期（天）
- * @param currency 货币符号
+ * @param currency 货币代码或符号
  * @param lang 语言
  * @returns 完整的价格显示文本
  */
 export function formatPriceWithCycle(
   price: number,
   billingCycle: number,
-  currency: string = '￥',
+  currency: string = 'CNY',
   lang: 'zh-CN' | 'en-US' = 'zh-CN',
 ): string {
   const priceText = formatPrice(price, currency, lang)
   const cycleText = getBillingCycleText(billingCycle, lang)
-  return price > 0 ? `${priceText} / ${cycleText}` : priceText
+  return price > 0 ? `${priceText}/${cycleText}` : priceText
 }
 
 /**

@@ -2,32 +2,10 @@ import { spawnSync } from 'node:child_process'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import process from 'node:process'
-import { createInterface } from 'node:readline/promises'
 
 const VERSION_RE = /^\d+\.\d+\.\d+(?:[-+][0-9A-Z.-]+)?$/i
 const VERSION_FIELD_RE = /^(\s*"version"\s*:\s*")([^"]*)(")/m
-const PATCH_VERSION_RE = /^(\d+)\.(\d+)\.(\d+)$/
-
-function readPackageVersion(): string {
-  const packageJson = JSON.parse(readFileSync(resolve(process.cwd(), 'package.json'), 'utf8')) as { version?: unknown }
-
-  if (typeof packageJson.version !== 'string') {
-    throw new TypeError('package.json does not contain a top-level string version field')
-  }
-
-  return packageJson.version
-}
-
-function bumpPatchVersion(version: string): string {
-  const match = PATCH_VERSION_RE.exec(version)
-
-  if (!match) {
-    throw new Error(`Cannot auto bump non-standard version: ${version}`)
-  }
-
-  const [, major, minor, patch] = match
-  return `${major}.${minor}.${Number(patch) + 1}`
-}
+const ROLLING_VERSION = '1.0.0'
 
 function readVersionArg(): string | undefined {
   const args = process.argv.slice(2)
@@ -51,35 +29,13 @@ function readVersionArg(): string | undefined {
   return undefined
 }
 
-async function resolveVersion(): Promise<string> {
+function resolveVersion(): string {
   const versionArg = readVersionArg()
 
-  if (versionArg) {
-    return versionArg
-  }
+  if (versionArg && versionArg !== ROLLING_VERSION)
+    throw new Error(`This fork uses the rolling ${ROLLING_VERSION} release. Change the release policy in code before publishing another version.`)
 
-  const currentVersion = readPackageVersion()
-  const nextVersion = bumpPatchVersion(currentVersion)
-  const rl = createInterface({ input: process.stdin, output: process.stdout })
-
-  try {
-    const answer = (await rl.question(
-      `No version provided. Use ${nextVersion} (${currentVersion} -> ${nextVersion})? Enter y to confirm, or enter another version: `,
-    )).trim()
-
-    if (answer.toLowerCase() === 'y' || answer.toLowerCase() === 'yes') {
-      return nextVersion
-    }
-
-    if (answer) {
-      return answer
-    }
-
-    throw new Error('No version provided')
-  }
-  finally {
-    rl.close()
-  }
+  return ROLLING_VERSION
 }
 
 function updateVersionField(filePath: string, version: string): void {
@@ -108,7 +64,7 @@ function gitAdd(files: string[]): void {
 }
 
 async function main(): Promise<void> {
-  const version = await resolveVersion()
+  const version = resolveVersion()
 
   if (!VERSION_RE.test(version)) {
     throw new Error(`Invalid version: ${version}`)
