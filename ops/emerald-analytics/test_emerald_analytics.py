@@ -1,6 +1,9 @@
 import importlib.util
+import io
+import json
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,6 +19,34 @@ SPEC.loader.exec_module(analytics)
 
 
 class ScoringModelTests(unittest.TestCase):
+    def test_rpc_batch_requests_one_full_window_aggregate(self):
+        response = [
+            {"id": request_id, "result": {"series": []}}
+            for request_id in ("p005", "p50", "p95", "p995", "loss")
+        ]
+
+        class FakeResponse(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                self.close()
+
+        captured = {}
+
+        def fake_urlopen(request, timeout):
+            captured["payload"] = json.loads(request.data)
+            captured["timeout"] = timeout
+            return FakeResponse(json.dumps(response).encode("utf-8"))
+
+        with mock.patch.object(analytics.urllib.request, "urlopen", fake_urlopen):
+            analytics.rpc_batch("https://example.invalid/api/rpc2", 6, ["node-a"], 30)
+
+        self.assertEqual(captured["timeout"], 30)
+        for request in captured["payload"]:
+            self.assertTrue(request["params"]["window_aggregate"])
+            self.assertEqual(request["params"]["max_points"], 1)
+
     def test_legacy_settings_migrate_to_v2_defaults(self):
         config = analytics.scoring_config(
             {

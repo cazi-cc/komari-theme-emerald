@@ -195,6 +195,7 @@ def rpc_batch(endpoint: str, hours: int, entity_ids: list[str], timeout: int) ->
         "hours": hours,
         "downsample": True,
         "max_points": 1,
+        "window_aggregate": True,
     }
     requests = [
         {
