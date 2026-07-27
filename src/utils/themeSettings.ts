@@ -4,6 +4,13 @@ export const NETWORK_SCORE_MODEL_VERSION = 2
 export const TCP_QUALITY_SCORE_MODEL_VERSION = 3
 
 export type PingChartLayout = 'combined' | 'split'
+export type HomeAnalysisEntry = 'network-comparison' | 'tcp-quality' | 'unlock-quality'
+
+export const HOME_ANALYSIS_ENTRIES: readonly HomeAnalysisEntry[] = [
+  'network-comparison',
+  'tcp-quality',
+  'unlock-quality',
+]
 
 export function filterAvailableHomePingTaskIds(
   taskIds: readonly number[],
@@ -45,6 +52,7 @@ export interface ThemeSettings {
   darkBackgroundUrl: string
   backgroundBlur: number
   backgroundOverlay: number
+  homeAnalysisEntries: HomeAnalysisEntry[]
   homePingTasksByNode: Record<string, number[]>
   homePingRowCount: number
   pingTaskColors: Record<string, string>
@@ -103,6 +111,7 @@ export interface ThemeSettings {
   tcpExcellentThreshold: number
   tcpGoodThreshold: number
   tcpFairThreshold: number
+  unlockQualityDefaultHours: number
 }
 
 export const DEFAULT_THEME_SETTINGS: ThemeSettings = {
@@ -128,6 +137,7 @@ export const DEFAULT_THEME_SETTINGS: ThemeSettings = {
   darkBackgroundUrl: '',
   backgroundBlur: 0,
   backgroundOverlay: 0,
+  homeAnalysisEntries: [...HOME_ANALYSIS_ENTRIES],
   homePingTasksByNode: {},
   homePingRowCount: 2,
   pingTaskColors: {},
@@ -186,6 +196,7 @@ export const DEFAULT_THEME_SETTINGS: ThemeSettings = {
   tcpExcellentThreshold: 95,
   tcpGoodThreshold: 85,
   tcpFairThreshold: 70,
+  unlockQualityDefaultHours: 24,
 }
 
 const HEX_COLOR_RE = /^#[0-9a-f]{6}$/i
@@ -241,6 +252,18 @@ function readTaskMap(value: unknown): Record<string, number[]> {
   }
 
   return result
+}
+
+function readHomeAnalysisEntries(value: unknown): HomeAnalysisEntry[] {
+  if (value === undefined)
+    return [...DEFAULT_THEME_SETTINGS.homeAnalysisEntries]
+  if (!Array.isArray(value))
+    return [...DEFAULT_THEME_SETTINGS.homeAnalysisEntries]
+
+  const validEntries = new Set<HomeAnalysisEntry>(HOME_ANALYSIS_ENTRIES)
+  return [...new Set(value.filter(
+    (entry): entry is HomeAnalysisEntry => typeof entry === 'string' && validEntries.has(entry as HomeAnalysisEntry),
+  ))]
 }
 
 function readColorMap(value: unknown): Record<string, string> {
@@ -327,6 +350,7 @@ export function normalizeThemeSettings(value: unknown): ThemeSettings {
     darkBackgroundUrl: readString(source.darkBackgroundUrl, DEFAULT_THEME_SETTINGS.darkBackgroundUrl),
     backgroundBlur: clampNumber(source.backgroundBlur, DEFAULT_THEME_SETTINGS.backgroundBlur, 0, 50),
     backgroundOverlay: clampNumber(source.backgroundOverlay, DEFAULT_THEME_SETTINGS.backgroundOverlay, -100, 100),
+    homeAnalysisEntries: readHomeAnalysisEntries(source.homeAnalysisEntries),
     homePingTasksByNode: readTaskMap(source.homePingTasksByNode),
     homePingRowCount: Math.round(clampNumber(source.homePingRowCount, DEFAULT_THEME_SETTINGS.homePingRowCount, 1, MAX_HOME_PING_TASKS)),
     pingTaskColors: readColorMap(source.pingTaskColors),
@@ -394,5 +418,8 @@ export function normalizeThemeSettings(value: unknown): ThemeSettings {
     tcpExcellentThreshold,
     tcpGoodThreshold,
     tcpFairThreshold,
+    unlockQualityDefaultHours: typeof source.unlockQualityDefaultHours === 'number' && VALID_CHART_HOURS.has(source.unlockQualityDefaultHours)
+      ? source.unlockQualityDefaultHours
+      : DEFAULT_THEME_SETTINGS.unlockQualityDefaultHours,
   }
 }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { ThemeSettings } from '@/utils/themeSettings'
+import type { HomeAnalysisEntry, ThemeSettings } from '@/utils/themeSettings'
 import { Icon } from '@iconify/vue'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import {
@@ -64,7 +64,7 @@ interface VisitorSecuritySettings {
   ip_blocklist: string
 }
 
-type SettingsSection = 'home-ping' | 'visitors' | 'comparison' | 'tcp-quality' | 'chart' | 'appearance' | 'notice' | 'background' | 'filing'
+type SettingsSection = 'analysis-entry' | 'home-ping' | 'visitors' | 'comparison' | 'tcp-quality' | 'chart' | 'appearance' | 'notice' | 'background' | 'filing'
 type StatusColorKey = 'pingExcellentColor' | 'pingGoodColor' | 'pingModerateColor' | 'pingWarningColor' | 'pingCriticalColor'
 type ScoreWeightKey = 'networkScoreLossWeight' | 'networkScoreP50Weight' | 'networkScoreP95Weight' | 'networkScoreVolatilityWeight' | 'networkScoreCoverageWeight'
 type TCPWeightKey
@@ -83,6 +83,7 @@ type TCPWeightKey
     | 'tcpProfileP20Weight'
 
 const sections: Array<{ key: SettingsSection, label: string, icon: string }> = [
+  { key: 'analysis-entry', label: '首页分析入口', icon: 'lucide:layout-grid' },
   { key: 'home-ping', label: '首页延迟任务', icon: 'lucide:list-ordered' },
   { key: 'visitors', label: '最近访客', icon: 'lucide:users' },
   { key: 'comparison', label: '线路对比', icon: 'lucide:route' },
@@ -92,6 +93,31 @@ const sections: Array<{ key: SettingsSection, label: string, icon: string }> = [
   { key: 'notice', label: '公告', icon: 'lucide:megaphone' },
   { key: 'background', label: '背景', icon: 'lucide:image' },
   { key: 'filing', label: '备案', icon: 'lucide:badge-check' },
+]
+const analysisEntryCatalog: Array<{
+  key: HomeAnalysisEntry
+  label: string
+  description: string
+  icon: string
+}> = [
+  {
+    key: 'network-comparison',
+    label: '线路对比',
+    description: '按延迟监测任务，对比不同节点到同一目标的 ICMP 网络质量。',
+    icon: 'lucide:route',
+  },
+  {
+    key: 'tcp-quality',
+    label: 'TCP 质量',
+    description: '以国内测试节点为目标，观察 TCP SYN 首次响应和大小包实验指标。',
+    icon: 'lucide:gauge',
+  },
+  {
+    key: 'unlock-quality',
+    label: 'ChatGPT 解锁线路',
+    description: '通过真实 HTTPS 链路评估解锁状态、响应速度和稳定性。',
+    icon: 'lucide:shield-check',
+  },
 ]
 const statusColorItems: Array<{ key: StatusColorKey, label: string }> = [
   { key: 'pingExcellentColor', label: '优秀' },
@@ -139,7 +165,7 @@ const MAC_USER_AGENT_REGEX = /macintosh|mac os/i
 const LINUX_USER_AGENT_REGEX = /linux/i
 const IP_RULE_SPLIT_REGEX = /\s+/
 
-const activeSection = ref<SettingsSection>('home-ping')
+const activeSection = ref<SettingsSection>('analysis-entry')
 const loading = ref(true)
 const saving = ref(false)
 const error = ref('')
@@ -182,6 +208,37 @@ const tcpLargeWeightTotal = computed(() => tcpLargeWeightItems.reduce((total, it
 const visitorPageCount = computed(() => Math.max(1, Math.ceil(visitorTotal.value / visitorPageSize)))
 const visitorRangeStart = computed(() => visitorTotal.value ? (visitorPage.value - 1) * visitorPageSize + 1 : 0)
 const visitorRangeEnd = computed(() => Math.min(visitorTotal.value, visitorPage.value * visitorPageSize))
+const orderedAnalysisEntries = computed(() => {
+  const byKey = new Map(analysisEntryCatalog.map(entry => [entry.key, entry]))
+  const enabled = settings.homeAnalysisEntries
+    .map(key => byKey.get(key))
+    .filter((entry): entry is typeof analysisEntryCatalog[number] => Boolean(entry))
+  const enabledKeys = new Set(settings.homeAnalysisEntries)
+  return [...enabled, ...analysisEntryCatalog.filter(entry => !enabledKeys.has(entry.key))]
+})
+
+function isAnalysisEntryEnabled(key: HomeAnalysisEntry): boolean {
+  return settings.homeAnalysisEntries.includes(key)
+}
+
+function toggleAnalysisEntry(key: HomeAnalysisEntry): void {
+  if (isAnalysisEntryEnabled(key)) {
+    settings.homeAnalysisEntries = settings.homeAnalysisEntries.filter(entry => entry !== key)
+    return
+  }
+  settings.homeAnalysisEntries = [...settings.homeAnalysisEntries, key]
+}
+
+function moveAnalysisEntry(key: HomeAnalysisEntry, offset: number): void {
+  const entries = [...settings.homeAnalysisEntries]
+  const index = entries.indexOf(key)
+  const nextIndex = index + offset
+  if (index < 0 || nextIndex < 0 || nextIndex >= entries.length)
+    return
+  entries.splice(index, 1)
+  entries.splice(nextIndex, 0, key)
+  settings.homeAnalysisEntries = entries
+}
 
 function unwrapData<T>(value: unknown): T {
   if (value && typeof value === 'object' && !Array.isArray(value) && 'data' in value)
@@ -597,7 +654,82 @@ onMounted(loadSettings)
             {{ success }}
           </div>
 
-          <template v-if="activeSection === 'home-ping'">
+          <template v-if="activeSection === 'analysis-entry'">
+            <header>
+              <h2 class="text-base font-semibold">
+                首页分析入口
+              </h2>
+              <p class="mt-1 text-sm text-muted-foreground">
+                控制首页入口的显示与顺序。桌面端并列显示，手机端按顺序逐行显示。
+              </p>
+            </header>
+
+            <div class="space-y-2 rounded-md border border-border bg-card p-4">
+              <div
+                v-for="entry in orderedAnalysisEntries"
+                :key="entry.key"
+                class="grid min-h-16 grid-cols-[36px_minmax(0,1fr)_auto] items-center gap-3 rounded-md border border-border/70 bg-background px-3 py-2"
+                :class="!isAnalysisEntryEnabled(entry.key) && 'opacity-60'"
+              >
+                <span class="flex size-9 items-center justify-center rounded-md bg-primary text-primary-foreground">
+                  <Icon :icon="entry.icon" width="17" height="17" />
+                </span>
+                <span class="min-w-0">
+                  <span class="block text-sm font-semibold">{{ entry.label }}</span>
+                  <span class="mt-0.5 block text-xs text-muted-foreground">{{ entry.description }}</span>
+                </span>
+                <span class="flex items-center gap-1">
+                  <button
+                    type="button"
+                    class="size-8 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30"
+                    title="上移"
+                    :disabled="!isAnalysisEntryEnabled(entry.key) || settings.homeAnalysisEntries.indexOf(entry.key) === 0"
+                    @click="moveAnalysisEntry(entry.key, -1)"
+                  >
+                    <Icon icon="lucide:chevron-up" class="mx-auto" width="16" height="16" />
+                  </button>
+                  <button
+                    type="button"
+                    class="size-8 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30"
+                    title="下移"
+                    :disabled="!isAnalysisEntryEnabled(entry.key) || settings.homeAnalysisEntries.indexOf(entry.key) === settings.homeAnalysisEntries.length - 1"
+                    @click="moveAnalysisEntry(entry.key, 1)"
+                  >
+                    <Icon icon="lucide:chevron-down" class="mx-auto" width="16" height="16" />
+                  </button>
+                  <button
+                    type="button"
+                    role="switch"
+                    :aria-checked="isAnalysisEntryEnabled(entry.key)"
+                    :aria-label="`${isAnalysisEntryEnabled(entry.key) ? '隐藏' : '显示'}${entry.label}`"
+                    class="relative h-6 w-11 rounded-full transition-colors"
+                    :class="isAnalysisEntryEnabled(entry.key) ? 'bg-primary' : 'bg-muted-foreground/25'"
+                    @click="toggleAnalysisEntry(entry.key)"
+                  >
+                    <span
+                      class="absolute left-1 top-1 size-4 rounded-full bg-white shadow transition-transform"
+                      :class="isAnalysisEntryEnabled(entry.key) ? 'translate-x-5' : 'translate-x-0'"
+                    />
+                  </button>
+                </span>
+              </div>
+            </div>
+
+            <div class="grid gap-4 rounded-md border border-border bg-card p-4 sm:grid-cols-2">
+              <label class="space-y-1 text-sm">
+                <span>ChatGPT 解锁分析默认时间范围</span>
+                <select v-model.number="settings.unlockQualityDefaultHours" class="h-9 w-full rounded-md border border-border bg-background px-3">
+                  <option :value="1">1 小时</option><option :value="6">6 小时</option><option :value="12">12 小时</option>
+                  <option :value="24">1 天</option><option :value="72">3 天</option><option :value="168">7 天</option>
+                </select>
+              </label>
+              <div class="rounded-md bg-muted/60 px-3 py-2 text-xs leading-5 text-muted-foreground">
+                首页和分析页只读取服务端快照。调整入口不会启动检测，也不会改变后台任务频率。
+              </div>
+            </div>
+          </template>
+
+          <template v-else-if="activeSection === 'home-ping'">
             <header>
               <h2 class="text-base font-semibold">
                 每节点首页延迟任务

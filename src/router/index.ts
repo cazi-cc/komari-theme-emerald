@@ -24,6 +24,11 @@ const router = createRouter({
       name: 'tcp-quality',
       component: () => import('@/views/TCPQuality.vue'),
     },
+    {
+      path: '/unlock-quality',
+      name: 'unlock-quality',
+      component: () => import('@/views/UnlockQuality.vue'),
+    },
   ],
 })
 

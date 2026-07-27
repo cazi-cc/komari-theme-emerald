@@ -26,11 +26,35 @@ const PingChart = defineAsyncComponent(() => import('@/components/PingChart.vue'
 
 const nodeItemStaggerMs = 35
 const nodeItemStaggerLimit = 12
+const analysisEntryCatalog = {
+  'network-comparison': {
+    label: '线路对比',
+    description: '按延迟任务，对比不同节点到同一目标的 ICMP 网络质量',
+    icon: 'lucide:route',
+    route: 'network-comparison',
+  },
+  'tcp-quality': {
+    label: 'TCP 质量',
+    description: '对比各节点 TCP SYN 首次响应与大小包实验指标',
+    icon: 'lucide:gauge',
+    route: 'tcp-quality',
+  },
+  'unlock-quality': {
+    label: 'ChatGPT 解锁线路',
+    description: '评估真实 HTTPS 解锁状态、响应速度与稳定性',
+    icon: 'lucide:shield-check',
+    route: 'unlock-quality',
+  },
+} as const
 
 const appStore = useAppStore()
 const { pickSurfaceClass } = useBackgroundSurface()
 const nodesStore = useNodesStore()
 const router = useRouter()
+const homeAnalysisEntries = computed(() => appStore.themeSettings.homeAnalysisEntries.map(key => ({
+  key,
+  ...analysisEntryCatalog[key],
+})))
 
 onActivated(() => {
   if (appStore.homeScrollPosition > 0) {
@@ -163,19 +187,24 @@ function getNodeItemTransitionStyle(index: number): Record<string, string> {
       </Alert>
     </div>
 
-    <div class="px-4 pb-4">
+    <div
+      v-if="homeAnalysisEntries.length"
+      class="grid grid-cols-1 gap-3 px-4 pb-4 lg:grid-cols-3"
+    >
       <button
+        v-for="entry in homeAnalysisEntries"
+        :key="entry.key"
         type="button"
-        class="network-comparison-cta group flex w-full items-center gap-3 rounded-md border border-emerald-600/20 bg-background/70 px-3 py-3 text-left shadow-sm transition-colors hover:border-emerald-600/45 hover:bg-background md:px-4"
-        :class="appStore.disablePageAnimation && 'network-comparison-cta--static'"
-        @click="router.push({ name: 'network-comparison' })"
+        class="analysis-cta group flex min-h-18 w-full items-center gap-3 rounded-md border border-emerald-600/20 bg-background/70 px-3 py-3 text-left shadow-sm transition-colors hover:border-emerald-600/45 hover:bg-background md:px-4"
+        :class="appStore.disablePageAnimation && 'analysis-cta--static'"
+        @click="router.push({ name: entry.route })"
       >
         <span class="flex size-9 shrink-0 items-center justify-center rounded-md bg-emerald-600 text-white">
-          <Icon icon="lucide:route" :width="18" :height="18" />
+          <Icon :icon="entry.icon" :width="18" :height="18" />
         </span>
         <span class="min-w-0 flex-1">
-          <span class="block text-sm font-semibold">线路对比</span>
-          <span class="mt-0.5 block text-xs text-muted-foreground">按延迟监测任务，对比不同节点到同一目标的网络质量</span>
+          <span class="block text-sm font-semibold">{{ entry.label }}</span>
+          <span class="mt-0.5 block text-xs text-muted-foreground">{{ entry.description }}</span>
         </span>
         <span class="hidden items-center gap-1 text-xs font-medium text-emerald-700 sm:flex dark:text-emerald-400">
           进入分析
@@ -318,13 +347,13 @@ function getNodeItemTransitionStyle(index: number): Record<string, string> {
 </template>
 
 <style scoped>
-.network-comparison-cta {
+.analysis-cta {
   position: relative;
   isolation: isolate;
-  animation: network-comparison-breathe 2.8s ease-in-out infinite;
+  animation: analysis-cta-breathe 2.8s ease-in-out infinite;
 }
 
-.network-comparison-cta::before {
+.analysis-cta::before {
   position: absolute;
   z-index: -1;
   inset: -2px;
@@ -335,15 +364,15 @@ function getNodeItemTransitionStyle(index: number): Record<string, string> {
     0 0 18px rgb(16 185 129 / 10%);
   content: '';
   pointer-events: none;
-  animation: network-comparison-breathe-ring 2.8s ease-in-out infinite;
+  animation: analysis-cta-breathe-ring 2.8s ease-in-out infinite;
 }
 
-.network-comparison-cta--static,
-.network-comparison-cta--static::before {
+.analysis-cta--static,
+.analysis-cta--static::before {
   animation: none;
 }
 
-@keyframes network-comparison-breathe {
+@keyframes analysis-cta-breathe {
   0%,
   100% {
     box-shadow:
@@ -358,7 +387,7 @@ function getNodeItemTransitionStyle(index: number): Record<string, string> {
   }
 }
 
-@keyframes network-comparison-breathe-ring {
+@keyframes analysis-cta-breathe-ring {
   0%,
   100% {
     opacity: 0.55;
@@ -400,8 +429,8 @@ function getNodeItemTransitionStyle(index: number): Record<string, string> {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .network-comparison-cta,
-  .network-comparison-cta::before,
+  .analysis-cta,
+  .analysis-cta::before,
   .node-card-switch-enter-active,
   .node-card-switch-leave-active,
   .node-card-switch-move {
