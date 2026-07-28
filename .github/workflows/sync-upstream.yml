@@ -3,60 +3,133 @@ name: Sync Upstream
 on:
   workflow_dispatch:
   schedule:
-    - cron: '53 3 * * 1'
+    - cron: "53 3 * * 1"
 
 permissions:
   contents: write
+  issues: write
   pull-requests: write
+
+concurrency:
+  group: sync-upstream-${{ github.repository }}
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPOSITORY: Tokinx/komari-theme-emerald
+  UPSTREAM_BRANCH: master
+  BASE_BRANCH: master
+  SYNC_BRANCH: sync/upstream-master
+  PR_TITLE: "chore: sync Tokinx/komari-theme-emerald master"
+  CONFLICT_ISSUE_TITLE: "[upstream-sync] Manual conflict resolution required"
 
 jobs:
   prepare-sync-pr:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          ref: ${{ env.BASE_BRANCH }}
 
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.14
 
       - name: Merge upstream into a review branch
+        id: sync
         run: |
           set -euo pipefail
           git config user.name "cazi-upstream-sync"
           git config user.email "actions@users.noreply.github.com"
-          git remote add upstream "https://github.com/Tokinx/komari-theme-emerald.git"
-          git fetch --no-tags upstream master
-          git fetch --no-tags origin master
+          git remote add upstream "https://github.com/${UPSTREAM_REPOSITORY}.git"
+          git fetch --no-tags upstream "${UPSTREAM_BRANCH}"
+          git fetch --no-tags origin "${BASE_BRANCH}"
 
-          if git merge-base --is-ancestor upstream/master origin/master; then
-            echo "The fork already contains the current upstream master."
+          if git merge-base --is-ancestor "upstream/${UPSTREAM_BRANCH}" "origin/${BASE_BRANCH}"; then
+            {
+              echo "needed=false"
+              echo "ready=false"
+              echo "conflict=false"
+            } >> "$GITHUB_OUTPUT"
+            echo "The fork already contains the current upstream branch." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
-          git checkout -B sync/upstream-master origin/master
-          git merge --no-edit upstream/master
+          git checkout -B "${SYNC_BRANCH}" "origin/${BASE_BRANCH}"
+          set +e
+          git merge --no-edit "upstream/${UPSTREAM_BRANCH}"
+          merge_status=$?
+          set -e
+
+          if [ "$merge_status" -ne 0 ]; then
+            conflict_files="$(git diff --name-only --diff-filter=U)"
+            git merge --abort
+            {
+              echo "needed=true"
+              echo "ready=false"
+              echo "conflict=true"
+              echo "conflict_files<<EOF"
+              echo "$conflict_files"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
+            {
+              echo "## Upstream sync requires manual conflict resolution"
+              echo
+              echo '```text'
+              echo "$conflict_files"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
           bun install --frozen-lockfile
           bun run build
-          git push --force-with-lease origin sync/upstream-master
+          git push --force-with-lease origin "${SYNC_BRANCH}"
+          {
+            echo "needed=true"
+            echo "ready=true"
+            echo "conflict=false"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Create or update the review pull request
+        if: steps.sync.outputs.ready == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if git merge-base --is-ancestor upstream/master origin/master; then
-            exit 0
-          fi
-          if gh pr view sync/upstream-master --json number >/dev/null 2>&1; then
-            gh pr edit sync/upstream-master \
-              --title "chore: sync Tokinx/komari-theme-emerald master" \
-              --body "Automated upstream merge. Keep the rolling v1.0.0 release policy and review Cazi settings, privacy and analysis pages before merging."
+          body="Automated upstream merge. Keep the rolling v1.0.0 release policy and review Cazi settings, privacy and analysis pages before merging."
+          if gh pr view "${SYNC_BRANCH}" --repo "${GITHUB_REPOSITORY}" --json number >/dev/null 2>&1; then
+            gh pr edit "${SYNC_BRANCH}" --repo "${GITHUB_REPOSITORY}" --title "${PR_TITLE}" --body "$body"
           else
-            gh pr create \
-              --base master \
-              --head sync/upstream-master \
-              --title "chore: sync Tokinx/komari-theme-emerald master" \
-              --body "Automated upstream merge. Keep the rolling v1.0.0 release policy and review Cazi settings, privacy and analysis pages before merging."
+            gh pr create --repo "${GITHUB_REPOSITORY}" --base "${BASE_BRANCH}" --head "${SYNC_BRANCH}" --title "${PR_TITLE}" --body "$body"
+          fi
+
+      - name: Record merge conflicts
+        if: steps.sync.outputs.conflict == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CONFLICT_FILES: ${{ steps.sync.outputs.conflict_files }}
+        run: |
+          set -euo pipefail
+          body="$(printf '%s\n\n%s\n\n```text\n%s\n```\n\n%s\n' \
+            "The scheduled upstream sync found conflicts and deliberately left the customized base branch unchanged." \
+            "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            "${CONFLICT_FILES}" \
+            "Resolve these files on a review branch, run the repository tests, and merge only after the custom features still pass.")"
+          issue_number="$(gh issue list --repo "${GITHUB_REPOSITORY}" --state open --search "${CONFLICT_ISSUE_TITLE} in:title" --json number --jq '.[0].number // empty')"
+          if [ -n "$issue_number" ]; then
+            gh issue edit "$issue_number" --repo "${GITHUB_REPOSITORY}" --body "$body"
+          else
+            gh issue create --repo "${GITHUB_REPOSITORY}" --title "${CONFLICT_ISSUE_TITLE}" --body "$body"
+          fi
+
+      - name: Close resolved conflict notice
+        if: steps.sync.outputs.conflict != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          issue_number="$(gh issue list --repo "${GITHUB_REPOSITORY}" --state open --search "${CONFLICT_ISSUE_TITLE} in:title" --json number --jq '.[0].number // empty')"
+          if [ -n "$issue_number" ]; then
+            gh issue close "$issue_number" --repo "${GITHUB_REPOSITORY}" --comment "The latest upstream sync no longer has merge conflicts."
           fi
