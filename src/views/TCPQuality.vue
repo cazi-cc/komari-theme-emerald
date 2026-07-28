@@ -434,7 +434,9 @@ onMounted(() => loadData())
           <p class="mb-2 text-xs text-muted-foreground">
             综合网络分、TCP 质量分与 ICMP 基础分并列展示。
           </p>
-          <VChart class="h-[430px] w-full" :option="scoreChartOption" autoresize />
+          <div class="quality-chart quality-chart--score">
+            <VChart class="size-full" :option="scoreChartOption" autoresize />
+          </div>
         </section>
 
         <section class="rounded-md border bg-card p-4 md:col-span-2 md:block" :class="[activeSection === 'distribution' ? 'block' : 'hidden']">
@@ -444,7 +446,9 @@ onMounted(() => loadData())
           <p class="mb-2 text-xs text-muted-foreground">
             越靠左下角越好。悬停可查看节点名称与公开备注。
           </p>
-          <VChart class="h-[420px] w-full" :option="distributionChartOption" autoresize />
+          <div class="quality-chart">
+            <VChart class="size-full" :option="distributionChartOption" autoresize />
+          </div>
         </section>
 
         <section class="rounded-md border bg-card p-4 md:col-span-2 md:block" :class="[activeSection === 'trend' ? 'block' : 'hidden']">
@@ -471,7 +475,9 @@ onMounted(() => loadData())
               </TabsList>
             </Tabs>
           </div>
-          <VChart class="h-[420px] w-full" :option="trendChartOption" autoresize />
+          <div class="quality-chart">
+            <VChart class="size-full" :option="trendChartOption" autoresize />
+          </div>
         </section>
 
         <section class="overflow-hidden rounded-md border bg-card md:col-span-2 md:block" :class="[activeSection === 'targets' ? 'block' : 'hidden']">

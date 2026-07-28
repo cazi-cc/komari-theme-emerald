@@ -416,7 +416,9 @@ onMounted(() => loadData())
               越靠左下角越好；悬停可查看节点名称与公开备注。
             </p>
           </div>
-          <VChart class="h-[410px] w-full" autoresize :option="distributionChartOption" />
+          <div class="quality-chart">
+            <VChart class="size-full" autoresize :option="distributionChartOption" />
+          </div>
         </section>
 
         <section class="rounded-md border bg-card p-4 md:col-span-2 md:block" :class="[activeSection === 'trend' ? 'block' : 'hidden']">
@@ -437,7 +439,9 @@ onMounted(() => loadData())
               </TabsList>
             </Tabs>
           </div>
-          <VChart class="h-[420px] w-full" autoresize :option="trendChartOption" />
+          <div class="quality-chart">
+            <VChart class="size-full" autoresize :option="trendChartOption" />
+          </div>
         </section>
 
         <section class="rounded-md border bg-card p-4 md:col-span-2 md:block" :class="[activeSection === 'details' ? 'block' : 'hidden']">
