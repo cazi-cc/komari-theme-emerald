@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: write
-  issues: write
   pull-requests: write
 
 concurrency:
@@ -20,7 +19,6 @@ env:
   BASE_BRANCH: master
   SYNC_BRANCH: sync/upstream-master
   PR_TITLE: "chore: sync Tokinx/komari-theme-emerald master"
-  CONFLICT_ISSUE_TITLE: "[upstream-sync] Manual conflict resolution required"
 
 jobs:
   prepare-sync-pr:
@@ -65,6 +63,24 @@ jobs:
             conflict_files="$(git diff --name-only --diff-filter=U)"
             git merge --abort
             {
+              echo "# Upstream sync requires manual resolution"
+              echo
+              echo "- Upstream: \`${UPSTREAM_REPOSITORY}:${UPSTREAM_BRANCH}\`"
+              echo "- Base: \`${GITHUB_REPOSITORY}:${BASE_BRANCH}\`"
+              echo "- Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+              echo
+              echo "## Conflicting files"
+              echo
+              echo '```text'
+              echo "$conflict_files"
+              echo '```'
+              echo
+              echo "Do not merge this report-only commit. Resolve the upstream merge on this branch, delete this file, run the repository tests, and then update the pull request."
+            } > .github/UPSTREAM_SYNC_CONFLICTS.md
+            git add .github/UPSTREAM_SYNC_CONFLICTS.md
+            git commit -m "chore: record upstream merge conflicts"
+            git push --force-with-lease origin "${SYNC_BRANCH}"
+            {
               echo "needed=true"
               echo "ready=false"
               echo "conflict=true"
@@ -104,32 +120,16 @@ jobs:
             gh pr create --repo "${GITHUB_REPOSITORY}" --base "${BASE_BRANCH}" --head "${SYNC_BRANCH}" --title "${PR_TITLE}" --body "$body"
           fi
 
-      - name: Record merge conflicts
+      - name: Create or update the conflict pull request
         if: steps.sync.outputs.conflict == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          CONFLICT_FILES: ${{ steps.sync.outputs.conflict_files }}
         run: |
           set -euo pipefail
-          body="$(printf '%s\n\n%s\n\n```text\n%s\n```\n\n%s\n' \
-            "The scheduled upstream sync found conflicts and deliberately left the customized base branch unchanged." \
-            "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
-            "${CONFLICT_FILES}" \
-            "Resolve these files on a review branch, run the repository tests, and merge only after the custom features still pass.")"
-          issue_number="$(gh issue list --repo "${GITHUB_REPOSITORY}" --state open --search "${CONFLICT_ISSUE_TITLE} in:title" --json number --jq '.[0].number // empty')"
-          if [ -n "$issue_number" ]; then
-            gh issue edit "$issue_number" --repo "${GITHUB_REPOSITORY}" --body "$body"
+          title="chore: resolve Tokinx/komari-theme-emerald upstream conflicts"
+          body="The automated upstream merge found conflicts. This branch currently contains a conflict report only and must not be merged as-is. Resolve the merge on this branch, delete the report, run all tests, and then update this pull request."
+          if gh pr view "${SYNC_BRANCH}" --repo "${GITHUB_REPOSITORY}" --json number >/dev/null 2>&1; then
+            gh pr edit "${SYNC_BRANCH}" --repo "${GITHUB_REPOSITORY}" --title "$title" --body "$body"
           else
-            gh issue create --repo "${GITHUB_REPOSITORY}" --title "${CONFLICT_ISSUE_TITLE}" --body "$body"
-          fi
-
-      - name: Close resolved conflict notice
-        if: steps.sync.outputs.conflict != 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          issue_number="$(gh issue list --repo "${GITHUB_REPOSITORY}" --state open --search "${CONFLICT_ISSUE_TITLE} in:title" --json number --jq '.[0].number // empty')"
-          if [ -n "$issue_number" ]; then
-            gh issue close "$issue_number" --repo "${GITHUB_REPOSITORY}" --comment "The latest upstream sync no longer has merge conflicts."
+            gh pr create --repo "${GITHUB_REPOSITORY}" --base "${BASE_BRANCH}" --head "${SYNC_BRANCH}" --title "$title" --body "$body"
           fi
