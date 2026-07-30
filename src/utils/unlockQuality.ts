@@ -119,7 +119,7 @@ export function formatUnlockQualityPercent(value: number): string {
 
 export function unlockQualityStatusLabel(status: UnlockQualityStatus): string {
   return {
-    available: '可用',
+    available: '地区可用',
     partial: '部分可用',
     region_limited: '地区受限',
     unavailable: '不可用',

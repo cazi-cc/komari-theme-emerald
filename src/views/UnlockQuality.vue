@@ -337,11 +337,28 @@ onMounted(() => loadData())
         </div>
         <div class="rounded-md border bg-card p-4">
           <p class="text-xs text-muted-foreground">
-            当前完整可用
+            当前地区可用
           </p>
           <p class="mt-1 text-2xl font-semibold">
             {{ availableNodes }}
           </p>
+        </div>
+      </section>
+
+      <section class="mb-5 border-y bg-muted/25 px-4 py-3">
+        <div class="mb-2 flex items-center gap-2">
+          <Icon icon="lucide:info" width="16" height="16" class="text-emerald-600 dark:text-emerald-400" />
+          <h2 class="text-sm font-semibold">
+            指标怎么理解
+          </h2>
+        </div>
+        <div class="grid gap-x-6 gap-y-2 text-xs leading-5 text-muted-foreground sm:grid-cols-2 lg:grid-cols-3">
+          <p><strong class="text-foreground">地区可用：</strong>服务确认该出口地区没有被限制；不代表已经登录账号。</p>
+          <p><strong class="text-foreground">TTFB：</strong>发出请求到收到第一个字节的时间，越低越快。</p>
+          <p><strong class="text-foreground">P50 / P95：</strong>一半请求不超过 P50；95% 请求不超过 P95，P95 更能反映偶发卡顿。</p>
+          <p><strong class="text-foreground">HTTPS 失败：</strong>超时、断线或 TLS 失败；正常返回的 401、403、404 不算网络失败。</p>
+          <p><strong class="text-foreground">DNS / 建连 / TLS：</strong>分别是查地址、建立 TCP 连接和完成加密握手的耗时。</p>
+          <p><strong class="text-foreground">覆盖率：</strong>实际采样占应采样的比例；低于 80% 时暂不评分，避免数据太少误导。</p>
         </div>
       </section>
 
@@ -369,7 +386,7 @@ onMounted(() => loadData())
               节点排名
             </h2>
             <p class="text-xs text-muted-foreground">
-              解锁 40%、HTTPS 成功 25%、TTFB 20%、连接与 TLS 10%、稳定性 5%。
+              地区可用 40%、请求成功 25%、TTFB 20%、连接与 TLS 10%、稳定性 5%。
             </p>
           </div>
           <div class="space-y-2">
@@ -389,7 +406,7 @@ onMounted(() => loadData())
                   {{ node.public_remark }}
                 </p>
                 <p class="mt-1 text-xs text-muted-foreground">
-                  TTFB {{ node.system.ttfb_p50_ms.toFixed(0) }} / {{ node.system.ttfb_p95_ms.toFixed(0) }}ms · 失败 {{ formatUnlockQualityPercent(node.system.failure_percent) }}
+                  {{ unlockQualityStatusLabel(node.system.status) }} · TTFB {{ node.system.ttfb_p50_ms.toFixed(0) }} / {{ node.system.ttfb_p95_ms.toFixed(0) }}ms · 失败 {{ formatUnlockQualityPercent(node.system.failure_percent) }}
                 </p>
                 <p class="mt-0.5 truncate text-[11px] text-muted-foreground">
                   {{ exitLabel(node) }}
