@@ -48,6 +48,17 @@ export function useNodePingDisplay(
     enabled: pingStatsEnabled,
   })
 
+  function formatPingHistoryTime(time: string): string {
+    return formatDateTime(time, pingRecordsQueryHours.value >= 24 ? 'MM-DD HH:mm' : 'HH:mm:ss')
+  }
+
+  function formatPingRangeLabel(): string {
+    const hours = pingRecordsQueryHours.value
+    if (hours % 24 === 0)
+      return `${hours / 24} 天`
+    return `${hours} 小时`
+  }
+
   function getToneColor(metric: NodePingMetric, value: number): string {
     const settings = appStore.themeSettings
     if (metric === 'latency') {
@@ -103,10 +114,10 @@ export function useNodePingDisplay(
           ? undefined
           : { backgroundColor: getToneColor(metric, value), opacity: metric === 'latency' ? 0.9 : 0.86 },
         tooltip: value === null
-          ? `${taskPrefix}${formatDateTime(point.time, 'HH:mm:ss')} N/A`
+          ? `${taskPrefix}${formatPingHistoryTime(point.time)} N/A`
           : metric === 'latency'
-            ? `${taskPrefix}${formatDateTime(point.time, 'HH:mm:ss')}\n${Math.round(value)} ms`
-            : `${taskPrefix}${formatDateTime(point.time, 'HH:mm:ss')}\n${value.toFixed(1)}%`,
+            ? `${taskPrefix}${formatPingHistoryTime(point.time)}\n${Math.round(value)} ms`
+            : `${taskPrefix}${formatPingHistoryTime(point.time)}\n${value.toFixed(1)}%`,
       }
     })
 
@@ -144,10 +155,10 @@ export function useNodePingDisplay(
 
     if (metric === 'latency') {
       return stats.history.some(point => point.latency !== null)
-        ? `${taskName} · 平均延迟 ${Math.round(stats.avgLatency)} ms`
-        : `${taskName} · 暂无有效延迟`
+        ? `${taskName} · 最近 ${formatPingRangeLabel()}平均延迟 ${Math.round(stats.avgLatency)} ms`
+        : `${taskName} · 最近 ${formatPingRangeLabel()}暂无有效延迟`
     }
-    return `${taskName} · 平均丢包 ${stats.avgLoss.toFixed(1)}%`
+    return `${taskName} · 最近 ${formatPingRangeLabel()}平均丢包 ${stats.avgLoss.toFixed(1)}%`
   }
 
   function createTaskDisplay(taskId: number | null, rowIndex: number): NodePingTaskDisplay {

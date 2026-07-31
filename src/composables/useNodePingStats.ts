@@ -66,7 +66,7 @@ export const NODE_PING_BAR_COUNT = 10
 const CACHE_VERSION = 7
 const CACHE_KEY_PREFIX = 'komari-theme-emerald:node-ping-stats'
 const FULL_LOSS_EPSILON = 1e-6
-const PING_RECORD_REFRESH_INTERVAL_MS = 60_000
+const CACHE_WRITE_THROTTLE_MS = 60_000
 const IPV4_TASK_NAME_RE = /(?:^|[^a-z0-9])(?:ipv4|v4)(?:$|[^a-z0-9])/
 const IPV6_TASK_NAME_RE = /(?:^|[^a-z0-9])(?:ipv6|v6)(?:$|[^a-z0-9])/
 const sharedPingRecordsCache = new Map<number, SharedPingRecordsEntry>()
@@ -74,6 +74,18 @@ const sharedPingRecordsCache = new Map<number, SharedPingRecordsEntry>()
 interface TaskRecordSummary {
   total: number
   success: number
+}
+
+function getPingRecordRefreshIntervalMs(hours: number): number {
+  if (hours <= 1)
+    return 60_000
+  if (hours <= 12)
+    return 2 * 60_000
+  if (hours <= 24)
+    return 5 * 60_000
+  if (hours <= 72)
+    return 10 * 60_000
+  return 15 * 60_000
 }
 
 function createEmptyStats(): NodePingStatsState {
@@ -295,7 +307,7 @@ function startSharedPingRecordsRefresh(entry: SharedPingRecordsEntry, hours: num
 
   entry.refreshTimer = setInterval(() => {
     void loadSharedPingRecords(entry, hours).catch(() => {})
-  }, PING_RECORD_REFRESH_INTERVAL_MS)
+  }, getPingRecordRefreshIntervalMs(hours))
 }
 
 function stopSharedPingRecordsRefresh(entry: SharedPingRecordsEntry): void {
@@ -583,8 +595,9 @@ export function useNodePingStats(
 
       syncSharedRecordsSubscription(hours)
       const entry = getSharedPingRecordsEntry(hours)
+      const refreshInterval = getPingRecordRefreshIntervalMs(hours)
       const shouldLoadRecords = !entry.data.value
-        || Date.now() - entry.lastFetchedAt >= PING_RECORD_REFRESH_INTERVAL_MS
+        || Date.now() - entry.lastFetchedAt >= refreshInterval
 
       if (!shouldLoadRecords) {
         loading.value = false
@@ -616,7 +629,7 @@ export function useNodePingStats(
     (nodeUuid: string, hours: number, value: NodePingStatsState) => {
       writeStatsCache(nodeUuid, hours, value)
     },
-    PING_RECORD_REFRESH_INTERVAL_MS,
+    CACHE_WRITE_THROTTLE_MS,
     true,
     true,
   )

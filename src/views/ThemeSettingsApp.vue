@@ -780,7 +780,7 @@ onMounted(loadSettings)
                 </button>
               </div>
               <p class="mt-3 text-xs leading-5 text-muted-foreground">
-                可输入 1–168 的整数。范围越长，每格代表的时间越长；查询仍由所有首页卡片共享，每 60 秒刷新一次。
+                可输入 1–168 的整数。范围越长，每格代表的时间越长；所有首页卡片共享查询，刷新间隔会按范围从 1 分钟逐步放宽到 15 分钟。
               </p>
             </div>
 
