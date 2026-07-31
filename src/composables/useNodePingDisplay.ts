@@ -8,8 +8,6 @@ import { resolveHomePingTaskId } from '@/utils/themeSettings'
 
 export type NodePingMetric = 'latency' | 'loss'
 
-const RECENT_PING_RECORDS_QUERY_HOURS = 1
-
 export interface NodePingBar {
   key: string
   className: string
@@ -44,7 +42,7 @@ export function useNodePingDisplay(
 ) {
   const appStore = useAppStore()
   const pingStatsEnabled = computed(() => options.enabled === undefined || toValue(options.enabled))
-  const pingRecordsQueryHours = computed(() => RECENT_PING_RECORDS_QUERY_HOURS)
+  const pingRecordsQueryHours = computed(() => appStore.themeSettings.homePingHistoryHours)
   const pingStats = useNodePingStats(uuid, {
     hours: pingRecordsQueryHours,
     enabled: pingStatsEnabled,

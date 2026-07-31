@@ -36,6 +36,8 @@ interface PingRecord {
 interface SharedPingRecordsResponse {
   records?: PingRecord[]
   tasks?: PingTask[]
+  from?: string
+  to?: string
 }
 
 export interface PingTask {
@@ -46,6 +48,8 @@ export interface PingTask {
 interface SharedPingRecordsState {
   recordsByClient: Map<string, PingRecord[]>
   tasks: PingTask[]
+  from: string
+  to: string
 }
 
 interface SharedPingRecordsEntry {
@@ -59,7 +63,7 @@ interface SharedPingRecordsEntry {
 }
 
 export const NODE_PING_BAR_COUNT = 10
-const CACHE_VERSION = 6
+const CACHE_VERSION = 7
 const CACHE_KEY_PREFIX = 'komari-theme-emerald:node-ping-stats'
 const FULL_LOSS_EPSILON = 1e-6
 const PING_RECORD_REFRESH_INTERVAL_MS = 60_000
@@ -267,6 +271,8 @@ async function loadSharedPingRecords(entry: SharedPingRecordsEntry, hours: numbe
       entry.data.value = {
         recordsByClient: buildRecordsByClient(result?.records ?? []),
         tasks: result?.tasks ?? [],
+        from: result?.from ?? new Date(Date.now() - hours * 60 * 60 * 1000).toISOString(),
+        to: result?.to ?? new Date().toISOString(),
       }
       entry.lastFetchedAt = Date.now()
     }
@@ -317,7 +323,11 @@ function retainSharedPingRecordsEntry(hours: number): () => void {
   }
 }
 
-function buildPingHistory(records: PingRecord[]): NodePingHistoryPoint[] {
+function buildPingHistory(
+  records: PingRecord[],
+  rangeStart: string,
+  rangeEnd: string,
+): NodePingHistoryPoint[] {
   const sortedRecords = records
     .map((record) => {
       const timestamp = new Date(record.time).getTime()
@@ -329,14 +339,17 @@ function buildPingHistory(records: PingRecord[]): NodePingHistoryPoint[] {
   if (!sortedRecords.length)
     return []
 
-  const firstTime = sortedRecords[0]?.timestamp ?? 0
-  const lastTime = sortedRecords.at(-1)?.timestamp ?? firstTime
-  const bucketCount = Math.min(NODE_PING_BAR_COUNT, sortedRecords.length)
-  const bucketSize = Math.max(1, (lastTime - firstTime) / bucketCount)
+  const parsedStart = new Date(rangeStart).getTime()
+  const parsedEnd = new Date(rangeEnd).getTime()
+  const firstRecordTime = sortedRecords[0]?.timestamp ?? 0
+  const lastRecordTime = sortedRecords.at(-1)?.timestamp ?? firstRecordTime
+  const firstTime = Number.isFinite(parsedStart) ? parsedStart : firstRecordTime
+  const lastTime = Number.isFinite(parsedEnd) && parsedEnd > firstTime ? parsedEnd : lastRecordTime
+  const bucketSize = Math.max(1, (lastTime - firstTime) / NODE_PING_BAR_COUNT)
 
-  return Array.from({ length: bucketCount }, (_, index) => {
+  return Array.from({ length: NODE_PING_BAR_COUNT }, (_, index) => {
     const startTime = firstTime + bucketSize * index
-    const endTime = index === bucketCount - 1 ? lastTime + 1 : startTime + bucketSize
+    const endTime = index === NODE_PING_BAR_COUNT - 1 ? lastTime + 1 : startTime + bucketSize
     const bucketRecords = sortedRecords.filter(
       record => record.timestamp >= startTime && record.timestamp < endTime,
     )
@@ -376,14 +389,18 @@ function getPercentile(values: number[], percentile: number): number | null {
   return lowerValue + (upperValue - lowerValue) * (position - lowerIndex)
 }
 
-function buildBaseStats(records: PingRecord[]): NodePingStatsState {
+function buildBaseStats(
+  records: PingRecord[],
+  rangeStart: string,
+  rangeEnd: string,
+): NodePingStatsState {
   const includedTaskIds = getIncludedTaskIds(records)
 
   if (!includedTaskIds.size)
     return createEmptyStats()
 
   const filteredRecords = records.filter(record => includedTaskIds.has(record.task_id))
-  const history = buildPingHistory(filteredRecords)
+  const history = buildPingHistory(filteredRecords, rangeStart, rangeEnd)
   const taskRecords = new Map<number, PingRecord[]>()
 
   for (const record of filteredRecords) {
@@ -456,8 +473,13 @@ function getIpFamilySortOrder(family: NodePingIpFamily): number {
   return 2
 }
 
-function buildStats(records: PingRecord[], tasks: PingTask[]): NodePingStatsState {
-  const aggregateStats = buildBaseStats(records)
+function buildStats(
+  records: PingRecord[],
+  tasks: PingTask[],
+  rangeStart: string,
+  rangeEnd: string,
+): NodePingStatsState {
+  const aggregateStats = buildBaseStats(records, rangeStart, rangeEnd)
   const tasksById = new Map(tasks.map(task => [task.id, task]))
   const recordsByTask = new Map<number, PingRecord[]>()
 
@@ -470,7 +492,7 @@ function buildStats(records: PingRecord[], tasks: PingTask[]): NodePingStatsStat
   const taskStats = Array.from(recordsByTask.entries(), ([taskId, taskRecords]): NodePingTaskStats => {
     const taskName = tasksById.get(taskId)?.name || `Ping ${taskId}`
     return {
-      ...buildBaseStats(taskRecords),
+      ...buildBaseStats(taskRecords, rangeStart, rangeEnd),
       taskId,
       taskName,
       ipFamily: detectIpFamily(taskName),
@@ -539,7 +561,7 @@ export function useNodePingStats(
       return readStatsCache(nodeUuid, hours) ?? createEmptyStats()
 
     const records = state.recordsByClient.get(nodeUuid) ?? []
-    return records.length ? buildStats(records, state.tasks) : createEmptyStats()
+    return records.length ? buildStats(records, state.tasks, state.from, state.to) : createEmptyStats()
   })
 
   // 副作用：按需触发首次共享加载并维护 loading/error，不再命令式写入 stats。

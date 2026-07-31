@@ -151,6 +151,14 @@ const tcpLargeWeightItems: Array<{ key: TCPWeightKey, label: string }> = [
   { key: 'tcpLargeCoverageWeight', label: '样本覆盖率' },
 ]
 const taskColorPalette = ['#FF6B6B', '#4ECDC4', '#A78BFA', '#60A5FA', '#FFB347', '#F472B6', '#34D399', '#FB923C']
+const homePingHistoryPresets = [
+  { hours: 1, label: '1 小时' },
+  { hours: 6, label: '6 小时' },
+  { hours: 12, label: '12 小时' },
+  { hours: 24, label: '1 天' },
+  { hours: 72, label: '3 天' },
+  { hours: 168, label: '7 天' },
+]
 const EDGE_USER_AGENT_REGEX = /Edg\/[\d.]+/i
 const OPERA_USER_AGENT_REGEX = /OPR\/[\d.]+/i
 const CHROME_USER_AGENT_REGEX = /Chrome\/[\d.]+/i
@@ -738,6 +746,43 @@ onMounted(loadSettings)
                 每个节点最多选择 {{ MAX_HOME_PING_TASKS }} 项。
               </p>
             </header>
+
+            <div class="rounded-md border border-border bg-card p-4">
+              <div class="flex flex-wrap items-start justify-between gap-4">
+                <div class="min-w-0">
+                  <h3 class="text-sm font-semibold">
+                    首页卡片展示范围
+                  </h3>
+                  <p class="mt-1 text-xs leading-5 text-muted-foreground">
+                    延迟和丢包的 10 格会均匀覆盖完整时间范围，统计值也按此范围计算。
+                  </p>
+                </div>
+                <label class="flex shrink-0 items-center gap-2 text-sm">
+                  <span class="text-muted-foreground">自定义</span>
+                  <input
+                    v-model.number="settings.homePingHistoryHours" type="number" min="1" max="168" step="1"
+                    class="h-9 w-20 rounded-md border border-border bg-background px-2 text-center font-semibold"
+                    aria-label="首页卡片展示小时数"
+                  >
+                  <span class="text-muted-foreground">小时</span>
+                </label>
+              </div>
+              <div class="mt-4 grid grid-cols-3 gap-2 sm:grid-cols-6">
+                <button
+                  v-for="preset in homePingHistoryPresets" :key="preset.hours" type="button"
+                  class="h-9 rounded-md border text-sm transition-colors"
+                  :class="settings.homePingHistoryHours === preset.hours
+                    ? 'border-primary bg-primary text-primary-foreground'
+                    : 'border-border bg-background text-muted-foreground hover:border-primary/50 hover:text-foreground'"
+                  @click="settings.homePingHistoryHours = preset.hours"
+                >
+                  {{ preset.label }}
+                </button>
+              </div>
+              <p class="mt-3 text-xs leading-5 text-muted-foreground">
+                可输入 1–168 的整数。范围越长，每格代表的时间越长；查询仍由所有首页卡片共享，每 60 秒刷新一次。
+              </p>
+            </div>
 
             <div class="rounded-md border border-border bg-card p-4">
               <div class="flex flex-wrap items-center justify-between gap-3">

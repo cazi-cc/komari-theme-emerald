@@ -55,6 +55,7 @@ export interface ThemeSettings {
   homeAnalysisEntries: HomeAnalysisEntry[]
   homePingTasksByNode: Record<string, number[]>
   homePingRowCount: number
+  homePingHistoryHours: number
   pingTaskColors: Record<string, string>
   pingExcellentColor: string
   pingGoodColor: string
@@ -140,6 +141,7 @@ export const DEFAULT_THEME_SETTINGS: ThemeSettings = {
   homeAnalysisEntries: [...HOME_ANALYSIS_ENTRIES],
   homePingTasksByNode: {},
   homePingRowCount: 2,
+  homePingHistoryHours: 1,
   pingTaskColors: {},
   pingExcellentColor: '#5EEAA6',
   pingGoodColor: '#47B592',
@@ -353,6 +355,7 @@ export function normalizeThemeSettings(value: unknown): ThemeSettings {
     homeAnalysisEntries: readHomeAnalysisEntries(source.homeAnalysisEntries),
     homePingTasksByNode: readTaskMap(source.homePingTasksByNode),
     homePingRowCount: Math.round(clampNumber(source.homePingRowCount, DEFAULT_THEME_SETTINGS.homePingRowCount, 1, MAX_HOME_PING_TASKS)),
+    homePingHistoryHours: Math.round(clampNumber(source.homePingHistoryHours, DEFAULT_THEME_SETTINGS.homePingHistoryHours, 1, 168)),
     pingTaskColors: readColorMap(source.pingTaskColors),
     pingExcellentColor: readColor(source.pingExcellentColor, DEFAULT_THEME_SETTINGS.pingExcellentColor),
     pingGoodColor: readColor(source.pingGoodColor, DEFAULT_THEME_SETTINGS.pingGoodColor),
