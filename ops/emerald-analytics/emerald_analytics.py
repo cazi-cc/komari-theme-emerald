@@ -206,6 +206,8 @@ def rpc_batch(endpoint: str, hours: int, entity_ids: list[str], timeout: int) ->
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:
         payload = json.load(response)
+    if isinstance(payload, dict):
+        payload = [payload]
     if not isinstance(payload, list):
         raise RuntimeError("Komari RPC batch response is not a list")
     results: dict[str, dict[str, Any]] = {}

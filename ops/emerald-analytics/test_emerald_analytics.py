@@ -20,9 +20,7 @@ SPEC.loader.exec_module(analytics)
 
 class ScoringModelTests(unittest.TestCase):
     def test_rpc_batch_requests_one_full_window_aggregate(self):
-        response = [
-            {"id": "stats", "result": {"stats": []}},
-        ]
+        response = {"id": "stats", "result": {"stats": []}}
 
         class FakeResponse(io.BytesIO):
             def __enter__(self):
