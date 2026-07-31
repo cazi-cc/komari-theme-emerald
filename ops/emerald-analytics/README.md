@@ -19,6 +19,14 @@ The generator opens the main Komari database with SQLite `mode=ro`. Its systemd
 sandbox grants the data directory write access only because WAL readers must be
 able to create and lock SQLite's transient `-shm` coordination file.
 
+## Ping metric contract
+
+Homepage cards, node details, and task-first comparison snapshots use
+`public:getPingMetricWindowStats` for their headline values. Latency statistics
+exclude failed `-1` samples; packet loss is the sample-count-weighted
+`ping.loss` mean. P0.5/P99.5 provide a broad but outlier-resistant range, while
+downsampled points are used only for drawing bars and trend lines.
+
 ## Scoring model
 
 Model v2 uses default weights of `40 / 30 / 25 / 3 / 2` for loss, P50, P95,

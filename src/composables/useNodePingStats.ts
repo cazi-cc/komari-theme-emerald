@@ -40,6 +40,41 @@ interface SharedPingRecordsResponse {
   to?: string
 }
 
+interface PingMetricPoint {
+  time: string
+  value: number | null
+  count?: number
+  tags?: Record<string, string>
+}
+
+interface PingLossMetricSeries {
+  metric_key: 'ping.loss'
+  entity_id: string
+  tags?: Record<string, string>
+  points?: PingMetricPoint[]
+}
+
+interface PingLossMetricResponse {
+  series?: PingLossMetricSeries[]
+}
+
+interface CanonicalPingTaskStats {
+  entity_id: string
+  task_id: string
+  name?: string
+  loss: number
+  avg?: number
+  p50?: number
+  p95?: number
+  p99?: number
+  p99_p50_ratio?: number
+  total: number
+}
+
+interface CanonicalPingStatsResponse {
+  stats?: CanonicalPingTaskStats[]
+}
+
 export interface PingTask {
   id: number
   name: string
@@ -47,6 +82,8 @@ export interface PingTask {
 
 interface SharedPingRecordsState {
   recordsByClient: Map<string, PingRecord[]>
+  canonicalStatsByClient: Map<string, CanonicalPingTaskStats[]>
+  lossHistoryByClient: Map<string, Map<number, NodePingHistoryPoint[]>>
   tasks: PingTask[]
   from: string
   to: string
@@ -63,10 +100,11 @@ interface SharedPingRecordsEntry {
 }
 
 export const NODE_PING_BAR_COUNT = 10
-const CACHE_VERSION = 7
+const CACHE_VERSION = 8
 const CACHE_KEY_PREFIX = 'komari-theme-emerald:node-ping-stats'
 const FULL_LOSS_EPSILON = 1e-6
 const CACHE_WRITE_THROTTLE_MS = 60_000
+const NODE_PING_LOSS_TREND_POINTS = 60
 const IPV4_TASK_NAME_RE = /(?:^|[^a-z0-9])(?:ipv4|v4)(?:$|[^a-z0-9])/
 const IPV6_TASK_NAME_RE = /(?:^|[^a-z0-9])(?:ipv6|v6)(?:$|[^a-z0-9])/
 const sharedPingRecordsCache = new Map<number, SharedPingRecordsEntry>()
@@ -264,6 +302,77 @@ function buildRecordsByClient(records: PingRecord[]): Map<string, PingRecord[]> 
   return grouped
 }
 
+function buildCanonicalStatsByClient(
+  stats: CanonicalPingTaskStats[],
+): Map<string, CanonicalPingTaskStats[]> {
+  const grouped = new Map<string, CanonicalPingTaskStats[]>()
+  for (const stat of stats) {
+    const clientStats = grouped.get(stat.entity_id) ?? []
+    clientStats.push(stat)
+    grouped.set(stat.entity_id, clientStats)
+  }
+  return grouped
+}
+
+function buildLossHistory(
+  points: PingMetricPoint[],
+  rangeStart: string,
+  rangeEnd: string,
+): NodePingHistoryPoint[] {
+  const firstTime = new Date(rangeStart).getTime()
+  const lastTime = new Date(rangeEnd).getTime()
+  const range = Math.max(1, lastTime - firstTime)
+  const buckets: Array<{ weightedLoss: number, count: number }> = []
+  for (let index = 0; index < NODE_PING_BAR_COUNT; index++) {
+    buckets.push({ weightedLoss: 0, count: 0 })
+  }
+
+  for (const point of points) {
+    if (!isFiniteNumber(point.value))
+      continue
+    const timestamp = new Date(point.time).getTime()
+    if (!Number.isFinite(timestamp))
+      continue
+    const rawIndex = Math.floor((timestamp - firstTime) / range * NODE_PING_BAR_COUNT)
+    const index = Math.min(NODE_PING_BAR_COUNT - 1, Math.max(0, rawIndex))
+    const count = isFiniteNumber(point.count) && point.count > 0 ? point.count : 1
+    const bucket = buckets[index]
+    if (!bucket)
+      continue
+    bucket.weightedLoss += Math.max(0, Math.min(1, point.value)) * count
+    bucket.count += count
+  }
+
+  return buckets.map((bucket, index) => ({
+    time: new Date(firstTime + range * index / NODE_PING_BAR_COUNT).toISOString(),
+    latency: null,
+    loss: bucket.count > 0 ? bucket.weightedLoss / bucket.count * 100 : null,
+  }))
+}
+
+function buildLossHistoryByClient(
+  seriesList: PingLossMetricSeries[],
+  rangeStart: string,
+  rangeEnd: string,
+): Map<string, Map<number, NodePingHistoryPoint[]>> {
+  const grouped = new Map<string, Map<number, NodePingHistoryPoint[]>>()
+
+  for (const series of seriesList) {
+    const taskId = Number(
+      series.tags?.task_id
+      ?? series.points?.find(point => point.tags?.task_id)?.tags?.task_id,
+    )
+    if (!series.entity_id || !Number.isInteger(taskId))
+      continue
+
+    const clientHistory = grouped.get(series.entity_id) ?? new Map<number, NodePingHistoryPoint[]>()
+    clientHistory.set(taskId, buildLossHistory(series.points ?? [], rangeStart, rangeEnd))
+    grouped.set(series.entity_id, clientHistory)
+  }
+
+  return grouped
+}
+
 async function loadSharedPingRecords(entry: SharedPingRecordsEntry, hours: number): Promise<void> {
   if (entry.promise)
     return entry.promise
@@ -274,17 +383,38 @@ async function loadSharedPingRecords(entry: SharedPingRecordsEntry, hours: numbe
 
   entry.promise = (async () => {
     try {
-      const result = await rpc.getClient().call<SharedPingRecordsResponse>('common:getRecords', {
+      const end = new Date()
+      const start = new Date(end.getTime() - hours * 60 * 60 * 1000)
+      const timeWindow = {
+        start: start.toISOString(),
+        end: end.toISOString(),
+      }
+      const recordsPromise = rpc.getClient().call<SharedPingRecordsResponse>('common:getRecords', {
         type: 'ping',
-        // 新版 getRecords 可能只返回近期可用样本，hours 仅作为服务端查询窗口。
-        hours,
+        ...timeWindow,
       })
+      const canonicalPromise = Promise.all([
+        rpc.getClient().call<CanonicalPingStatsResponse>('public:getPingMetricWindowStats', timeWindow),
+        rpc.getClient().call<PingLossMetricResponse>('public:queryMetrics', {
+          metric_keys: ['ping.loss'],
+          ...timeWindow,
+          downsample: true,
+          max_points: NODE_PING_LOSS_TREND_POINTS,
+          aggregation: 'avg',
+        }),
+      ]).catch(() => null)
+      const [result, canonicalResult] = await Promise.all([recordsPromise, canonicalPromise])
+      const rangeStart = result?.from ?? timeWindow.start
+      const rangeEnd = result?.to ?? timeWindow.end
+      const [statsResult, lossResult] = canonicalResult ?? [{ stats: [] }, { series: [] }]
 
       entry.data.value = {
         recordsByClient: buildRecordsByClient(result?.records ?? []),
+        canonicalStatsByClient: buildCanonicalStatsByClient(statsResult?.stats ?? []),
+        lossHistoryByClient: buildLossHistoryByClient(lossResult?.series ?? [], rangeStart, rangeEnd),
         tasks: result?.tasks ?? [],
-        from: result?.from ?? new Date(Date.now() - hours * 60 * 60 * 1000).toISOString(),
-        to: result?.to ?? new Date().toISOString(),
+        from: rangeStart,
+        to: rangeEnd,
       }
       entry.lastFetchedAt = Date.now()
     }
@@ -485,15 +615,39 @@ function getIpFamilySortOrder(family: NodePingIpFamily): number {
   return 2
 }
 
+function mergePingHistory(
+  latencyHistory: NodePingHistoryPoint[],
+  lossHistory?: NodePingHistoryPoint[],
+): NodePingHistoryPoint[] {
+  if (!lossHistory?.length)
+    return latencyHistory
+
+  return Array.from({ length: NODE_PING_BAR_COUNT }, (_, index) => {
+    const latencyPoint = latencyHistory[index]
+    const lossPoint = lossHistory[index]
+    return {
+      time: lossPoint?.time ?? latencyPoint?.time ?? '',
+      latency: latencyPoint?.latency ?? null,
+      loss: lossPoint?.loss ?? null,
+    }
+  })
+}
+
 function buildStats(
   records: PingRecord[],
   tasks: PingTask[],
   rangeStart: string,
   rangeEnd: string,
+  canonicalStats: CanonicalPingTaskStats[] = [],
+  lossHistoryByTask: Map<number, NodePingHistoryPoint[]> = new Map(),
 ): NodePingStatsState {
-  const aggregateStats = buildBaseStats(records, rangeStart, rangeEnd)
   const tasksById = new Map(tasks.map(task => [task.id, task]))
   const recordsByTask = new Map<number, PingRecord[]>()
+  const canonicalByTask = new Map(
+    canonicalStats
+      .map(stat => [Number(stat.task_id), stat] as const)
+      .filter(([taskId]) => Number.isInteger(taskId)),
+  )
 
   for (const record of records) {
     const taskRecords = recordsByTask.get(record.task_id) ?? []
@@ -501,10 +655,28 @@ function buildStats(
     recordsByTask.set(record.task_id, taskRecords)
   }
 
-  const taskStats = Array.from(recordsByTask.entries(), ([taskId, taskRecords]): NodePingTaskStats => {
-    const taskName = tasksById.get(taskId)?.name || `Ping ${taskId}`
+  const taskIds = new Set(
+    [...recordsByTask.keys(), ...canonicalByTask.keys()]
+      .filter(taskId => tasksById.has(taskId)),
+  )
+  const taskStats = Array.from(taskIds, (taskId): NodePingTaskStats => {
+    const baseStats = buildBaseStats(recordsByTask.get(taskId) ?? [], rangeStart, rangeEnd)
+    const canonical = canonicalByTask.get(taskId)
+    const taskName = canonical?.name || tasksById.get(taskId)?.name || `Ping ${taskId}`
+    const history = mergePingHistory(baseStats.history, lossHistoryByTask.get(taskId))
+    const avgLatency = isFiniteNumber(canonical?.avg) ? canonical.avg : baseStats.avgLatency
+    const avgLoss = isFiniteNumber(canonical?.loss) ? canonical.loss : baseStats.avgLoss
+    const avgVolatility = isFiniteNumber(canonical?.p99_p50_ratio)
+      ? canonical.p99_p50_ratio
+      : baseStats.avgVolatility
+
     return {
-      ...buildBaseStats(taskRecords, rangeStart, rangeEnd),
+      avgLatency,
+      avgLoss,
+      avgVolatility,
+      history,
+      hasData: Boolean(canonical?.total) || baseStats.hasData,
+      taskStats: [],
       taskId,
       taskName,
       ipFamily: detectIpFamily(taskName),
@@ -515,8 +687,13 @@ function buildStats(
       return familyOrder || left.taskId - right.taskId
     })
 
+  const populatedTasks = taskStats.filter(task => task.hasData)
   return {
-    ...aggregateStats,
+    avgLatency: average(populatedTasks.map(task => task.avgLatency)),
+    avgLoss: average(populatedTasks.map(task => task.avgLoss)),
+    avgVolatility: average(populatedTasks.map(task => task.avgVolatility)),
+    history: [],
+    hasData: populatedTasks.length > 0,
     taskStats,
   }
 }
@@ -573,7 +750,17 @@ export function useNodePingStats(
       return readStatsCache(nodeUuid, hours) ?? createEmptyStats()
 
     const records = state.recordsByClient.get(nodeUuid) ?? []
-    return records.length ? buildStats(records, state.tasks, state.from, state.to) : createEmptyStats()
+    const canonicalStats = state.canonicalStatsByClient?.get(nodeUuid) ?? []
+    if (!records.length && !canonicalStats.length)
+      return createEmptyStats()
+    return buildStats(
+      records,
+      state.tasks,
+      state.from,
+      state.to,
+      canonicalStats,
+      state.lossHistoryByClient?.get(nodeUuid),
+    )
   })
 
   // 副作用：按需触发首次共享加载并维护 loading/error，不再命令式写入 stats。

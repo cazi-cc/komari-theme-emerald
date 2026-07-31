@@ -124,6 +124,7 @@ interface TaskInfo {
   loss: number
   p99?: number
   p50?: number
+  p95?: number
   p99_p50_ratio?: number
   min?: number
   max?: number
@@ -163,6 +164,7 @@ interface PingMetricTaskStats {
   latest?: number
   total: number
   p50?: number
+  p95?: number
   p99?: number
   p99_p50_ratio?: number
 }
@@ -247,10 +249,9 @@ async function fetchMetricRecords(uuid: string, hours: number): Promise<PingChar
       max_points: 500,
       aggregation: 'avg',
     }),
-    rpc.getClient().call<PingMetricStatsResponse>('public:getPingMetricStats', {
+    rpc.getClient().call<PingMetricStatsResponse>('public:getPingMetricWindowStats', {
       uuid,
       hours,
-      max_points: 500,
     }),
   ])
 
@@ -281,6 +282,7 @@ async function fetchMetricRecords(uuid: string, hours: number): Promise<PingChar
     loss: task.loss,
     p99: task.p99,
     p50: task.p50,
+    p95: task.p95,
     p99_p50_ratio: task.p99_p50_ratio,
     min: task.min,
     max: task.max,
@@ -507,7 +509,7 @@ const latestValues = computed(() => {
       ...task,
       latestValue: latestMap.get(task.id) ?? null,
       color: getTaskColor(task.id),
-      p95: getTaskPercentile(task.id, 0.95),
+      p95: task.p95 ?? getTaskPercentile(task.id, 0.95),
     }
   })
 })

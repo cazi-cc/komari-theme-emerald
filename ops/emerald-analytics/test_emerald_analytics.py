@@ -21,8 +21,7 @@ SPEC.loader.exec_module(analytics)
 class ScoringModelTests(unittest.TestCase):
     def test_rpc_batch_requests_one_full_window_aggregate(self):
         response = [
-            {"id": request_id, "result": {"series": []}}
-            for request_id in ("p005", "p50", "p95", "p995", "loss")
+            {"id": "stats", "result": {"stats": []}},
         ]
 
         class FakeResponse(io.BytesIO):
@@ -43,9 +42,10 @@ class ScoringModelTests(unittest.TestCase):
             analytics.rpc_batch("https://example.invalid/api/rpc2", 6, ["node-a"], 30)
 
         self.assertEqual(captured["timeout"], 30)
-        for request in captured["payload"]:
-            self.assertTrue(request["params"]["window_aggregate"])
-            self.assertEqual(request["params"]["max_points"], 1)
+        self.assertEqual(len(captured["payload"]), 1)
+        stats_request = next(request for request in captured["payload"] if request["id"] == "stats")
+        self.assertEqual(stats_request["method"], "public:getPingMetricWindowStats")
+        self.assertEqual(stats_request["params"], {"entity_ids": ["node-a"], "hours": 6})
 
     def test_legacy_settings_migrate_to_v2_defaults(self):
         config = analytics.scoring_config(
@@ -122,11 +122,7 @@ class ScoringModelTests(unittest.TestCase):
             ],
             analytics.scoring_config({}),
             {
-                "p005": {"series": []},
-                "p50": {"series": []},
-                "p95": {"series": []},
-                "p995": {"series": []},
-                "loss": {"series": []},
+                "stats": {"stats": []},
             },
         )
 
@@ -134,16 +130,20 @@ class ScoringModelTests(unittest.TestCase):
         self.assertNotIn("target", window["tasks"][0])
 
     def test_public_window_includes_robust_full_latency_range(self):
-        def result(value):
-            return {
-                "series": [
-                    {
-                        "entity_id": "node-a",
-                        "tags": {"task_id": "1"},
-                        "points": [{"value": value, "count": 120}],
-                    }
-                ]
-            }
+        stats = {
+            "stats": [
+                {
+                    "entity_id": "node-a",
+                    "task_id": "1",
+                    "p005": 21.25,
+                    "p50": 32.5,
+                    "p95": 48.75,
+                    "p995": 91.0,
+                    "loss": 0.0,
+                    "total": 120,
+                }
+            ]
+        }
 
         window = analytics.build_window(
             1,
@@ -151,11 +151,7 @@ class ScoringModelTests(unittest.TestCase):
             [{"id": 1, "name": "Task", "type": "icmp", "interval": 30, "clients": ["node-a"]}],
             analytics.scoring_config({}),
             {
-                "p005": result(21.25),
-                "p50": result(32.5),
-                "p95": result(48.75),
-                "p995": result(91.0),
-                "loss": result(0.0),
+                "stats": stats,
             },
         )
 

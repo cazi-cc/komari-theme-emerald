@@ -190,43 +190,12 @@ def scoring_config(settings: dict[str, Any]) -> dict[str, Any]:
 
 
 def rpc_batch(endpoint: str, hours: int, entity_ids: list[str], timeout: int) -> dict[str, dict[str, Any]]:
-    common = {
-        "entity_ids": entity_ids,
-        "hours": hours,
-        "downsample": True,
-        "max_points": 1,
-        "window_aggregate": True,
-    }
     requests = [
         {
             "jsonrpc": "2.0",
-            "id": "p005",
-            "method": "public:queryMetrics",
-            "params": {**common, "metric_keys": ["ping.latency_ms"], "aggregation": "p0.5"},
-        },
-        {
-            "jsonrpc": "2.0",
-            "id": "p50",
-            "method": "public:queryMetrics",
-            "params": {**common, "metric_keys": ["ping.latency_ms"], "aggregation": "p50"},
-        },
-        {
-            "jsonrpc": "2.0",
-            "id": "p95",
-            "method": "public:queryMetrics",
-            "params": {**common, "metric_keys": ["ping.latency_ms"], "aggregation": "p95"},
-        },
-        {
-            "jsonrpc": "2.0",
-            "id": "p995",
-            "method": "public:queryMetrics",
-            "params": {**common, "metric_keys": ["ping.latency_ms"], "aggregation": "p99.5"},
-        },
-        {
-            "jsonrpc": "2.0",
-            "id": "loss",
-            "method": "public:queryMetrics",
-            "params": {**common, "metric_keys": ["ping.loss"], "aggregation": "avg"},
+            "id": "stats",
+            "method": "public:getPingMetricWindowStats",
+            "params": {"entity_ids": entity_ids, "hours": hours},
         },
     ]
     request = urllib.request.Request(
@@ -249,30 +218,24 @@ def rpc_batch(endpoint: str, hours: int, entity_ids: list[str], timeout: int) ->
         result = item.get("result")
         if isinstance(result, dict):
             results[request_id] = result
-    missing = {"p005", "p50", "p95", "p995", "loss"} - results.keys()
+    missing = {"stats"} - results.keys()
     if missing:
         raise RuntimeError(f"Komari RPC response is missing: {', '.join(sorted(missing))}")
     return results
 
 
-def metric_points(result: dict[str, Any]) -> dict[tuple[str, int], dict[str, Any]]:
+def ping_metric_stats(result: dict[str, Any]) -> dict[tuple[str, int], dict[str, Any]]:
     output: dict[tuple[str, int], dict[str, Any]] = {}
-    for series in result.get("series", []):
-        if not isinstance(series, dict):
+    for stat in result.get("stats", []):
+        if not isinstance(stat, dict):
             continue
-        entity_id = series.get("entity_id")
-        tags = series.get("tags") if isinstance(series.get("tags"), dict) else {}
-        task_id = tags.get("task_id")
-        points = series.get("points")
-        if not isinstance(entity_id, str) or not isinstance(task_id, str) or not isinstance(points, list):
-            continue
+        entity_id = stat.get("entity_id")
         try:
-            numeric_task_id = int(task_id)
-        except ValueError:
+            task_id = int(stat.get("task_id"))
+        except (TypeError, ValueError):
             continue
-        valid_points = [point for point in points if isinstance(point, dict) and point.get("value") is not None]
-        if valid_points:
-            output[(entity_id, numeric_task_id)] = valid_points[-1]
+        if isinstance(entity_id, str):
+            output[(entity_id, task_id)] = stat
     return output
 
 
@@ -375,11 +338,7 @@ def build_window(
     results: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
     generated = utc_now()
-    p005_points = metric_points(results["p005"])
-    p50_points = metric_points(results["p50"])
-    p95_points = metric_points(results["p95"])
-    p995_points = metric_points(results["p995"])
-    loss_points = metric_points(results["loss"])
+    stats_points = ping_metric_stats(results["stats"])
     client_map = {client["uuid"]: client for client in clients}
     task_output = []
 
@@ -391,15 +350,11 @@ def build_window(
             if not client:
                 continue
             key = (uuid, task["id"])
-            p005_point = p005_points.get(key)
-            p50_point = p50_points.get(key)
-            p95_point = p95_points.get(key)
-            p995_point = p995_points.get(key)
-            loss_point = loss_points.get(key)
-            p005 = finite_number(p005_point.get("value"), 0) if p005_point else None
-            p50 = finite_number(p50_point.get("value"), 0) if p50_point else None
-            p95 = finite_number(p95_point.get("value"), 0) if p95_point else None
-            p995 = finite_number(p995_point.get("value"), 0) if p995_point else None
+            stats_point = stats_points.get(key)
+            p005 = finite_number(stats_point.get("p005"), 0) if stats_point else None
+            p50 = finite_number(stats_point.get("p50"), 0) if stats_point else None
+            p95 = finite_number(stats_point.get("p95"), 0) if stats_point else None
+            p995 = finite_number(stats_point.get("p995"), 0) if stats_point else None
             if p005 is not None and p005 < 0:
                 p005 = None
             if p50 is not None and p50 < 0:
@@ -408,10 +363,9 @@ def build_window(
                 p95 = None
             if p995 is not None and p995 < 0:
                 p995 = None
-            samples = int((loss_point or p50_point or {}).get("count") or 0)
-            loss_fraction = clamp(finite_number(loss_point.get("value"), 0), 0, 1) if loss_point else 0.0
-            loss_percent = loss_fraction * 100
-            loss_count = int(round(loss_fraction * samples))
+            samples = int((stats_point or {}).get("total") or 0)
+            loss_percent = clamp(finite_number((stats_point or {}).get("loss"), 0), 0, 100)
+            loss_count = int(round(loss_percent / 100 * samples))
             coverage = min(100.0, samples * 100 / expected_samples)
             volatility = (
                 max(0.0, p95 - p50) / max(p50, 10.0)
