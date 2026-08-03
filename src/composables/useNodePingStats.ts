@@ -100,7 +100,7 @@ interface SharedPingRecordsEntry {
 }
 
 export const NODE_PING_BAR_COUNT = 10
-const CACHE_VERSION = 8
+const CACHE_VERSION = 9
 const CACHE_KEY_PREFIX = 'komari-theme-emerald:node-ping-stats'
 const FULL_LOSS_EPSILON = 1e-6
 const CACHE_WRITE_THROTTLE_MS = 60_000
