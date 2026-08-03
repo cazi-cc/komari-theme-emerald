@@ -25,6 +25,11 @@ interface AdminPingTask {
   default_on?: boolean
 }
 
+interface AdminNetworkQualityTask {
+  id: number
+  name: string
+}
+
 interface VisitorLog {
   id: number
   ip: string
@@ -86,8 +91,8 @@ const sections: Array<{ key: SettingsSection, label: string, icon: string }> = [
   { key: 'analysis-entry', label: '首页分析入口', icon: 'lucide:layout-grid' },
   { key: 'home-ping', label: '首页延迟任务', icon: 'lucide:list-ordered' },
   { key: 'visitors', label: '最近访客', icon: 'lucide:users' },
-  { key: 'comparison', label: '线路对比', icon: 'lucide:route' },
-  { key: 'tcp-quality', label: 'TCP 质量', icon: 'lucide:gauge' },
+  { key: 'comparison', label: 'ICMP 基础评分', icon: 'lucide:route' },
+  { key: 'tcp-quality', label: '综合网络评分', icon: 'lucide:gauge' },
   { key: 'chart', label: '详情图表', icon: 'lucide:chart-no-axes-combined' },
   { key: 'appearance', label: '页面与显示', icon: 'lucide:layout-dashboard' },
   { key: 'notice', label: '公告', icon: 'lucide:megaphone' },
@@ -101,15 +106,9 @@ const analysisEntryCatalog: Array<{
   icon: string
 }> = [
   {
-    key: 'network-comparison',
-    label: '线路对比',
-    description: '按延迟监测任务，对比不同节点到同一目标的 ICMP 网络质量。',
-    icon: 'lucide:route',
-  },
-  {
-    key: 'tcp-quality',
-    label: 'TCP 质量',
-    description: '以国内测试节点为目标，观察 TCP SYN 首次响应和大小包实验指标。',
+    key: 'network-quality',
+    label: '网络质量',
+    description: '将 ICMP 延迟、丢包与 TCP 建连质量合并为同一套节点评分。',
     icon: 'lucide:gauge',
   },
   {
@@ -180,6 +179,7 @@ const error = ref('')
 const success = ref('')
 const nodes = ref<AdminNode[]>([])
 const tasks = ref<AdminPingTask[]>([])
+const networkQualityTasks = ref<AdminNetworkQualityTask[]>([])
 const draggedTask = ref<{ uuid: string, taskId: number } | null>(null)
 const visitors = ref<VisitorLog[]>([])
 const visitorLoading = ref(false)
@@ -224,6 +224,16 @@ const orderedAnalysisEntries = computed(() => {
   const enabledKeys = new Set(settings.homeAnalysisEntries)
   return [...enabled, ...analysisEntryCatalog.filter(entry => !enabledKeys.has(entry.key))]
 })
+const selectedNetworkQualityTaskIds = computed(() => new Set(settings.homeNetworkScoreTaskIds))
+const orderedNetworkQualityTasks = computed(() => {
+  if (!settings.homeNetworkScoreTaskIds.length)
+    return [...networkQualityTasks.value]
+  const byId = new Map(networkQualityTasks.value.map(task => [task.id, task]))
+  const selected = settings.homeNetworkScoreTaskIds
+    .map(taskId => byId.get(taskId))
+    .filter((task): task is AdminNetworkQualityTask => Boolean(task))
+  return [...selected, ...networkQualityTasks.value.filter(task => !selectedNetworkQualityTaskIds.value.has(task.id))]
+})
 
 function isAnalysisEntryEnabled(key: HomeAnalysisEntry): boolean {
   return settings.homeAnalysisEntries.includes(key)
@@ -246,6 +256,40 @@ function moveAnalysisEntry(key: HomeAnalysisEntry, offset: number): void {
   entries.splice(index, 1)
   entries.splice(nextIndex, 0, key)
   settings.homeAnalysisEntries = entries
+}
+
+function toggleNetworkQualityTask(taskId: number): void {
+  if (!settings.homeNetworkScoreTaskIds.length) {
+    settings.homeNetworkScoreTaskIds = networkQualityTasks.value.map(task => task.id).filter(id => id !== taskId)
+    return
+  }
+  if (selectedNetworkQualityTaskIds.value.has(taskId)) {
+    settings.homeNetworkScoreTaskIds = settings.homeNetworkScoreTaskIds.filter(id => id !== taskId)
+    return
+  }
+  settings.homeNetworkScoreTaskIds = [...settings.homeNetworkScoreTaskIds, taskId]
+}
+
+function isNetworkQualityTaskSelected(taskId: number): boolean {
+  return !settings.homeNetworkScoreTaskIds.length || selectedNetworkQualityTaskIds.value.has(taskId)
+}
+
+function moveNetworkQualityTask(taskId: number, offset: number): void {
+  const taskIds = [...settings.homeNetworkScoreTaskIds]
+  const index = taskIds.indexOf(taskId)
+  const nextIndex = index + offset
+  if (index < 0 || nextIndex < 0 || nextIndex >= taskIds.length)
+    return
+  taskIds.splice(index, 1)
+  taskIds.splice(nextIndex, 0, taskId)
+  settings.homeNetworkScoreTaskIds = taskIds
+}
+
+function ensureNetworkQualitySelections(): void {
+  const available = new Set(networkQualityTasks.value.map(task => task.id))
+  settings.homeNetworkScoreTaskIds = settings.homeNetworkScoreTaskIds.filter(taskId => available.has(taskId))
+  if (settings.homeNetworkScoreFixedTaskId !== null && !available.has(settings.homeNetworkScoreFixedTaskId))
+    settings.homeNetworkScoreFixedTaskId = null
 }
 
 function unwrapData<T>(value: unknown): T {
@@ -553,16 +597,21 @@ async function loadSettings(): Promise<void> {
     if (!me.logged_in)
       throw new Error('管理员登录已失效，请重新登录 Komari 后台。')
 
-    const [publicInfo, nodeList, taskList] = await Promise.all([
+    const [publicInfo, nodeList, taskList, networkTaskList] = await Promise.all([
       fetchJson<{ theme_settings?: Record<string, unknown> }>('/api/public'),
       fetchJson<AdminNode[]>('/api/admin/client/list'),
       fetchJson<AdminPingTask[]>('/api/admin/ping'),
+      rpcCall<AdminNetworkQualityTask[]>('public:getPublicTCPQualityTasks', {}),
     ])
 
     Object.assign(settings, normalizeThemeSettings(publicInfo.theme_settings))
     nodes.value = Array.isArray(nodeList) ? nodeList : []
     tasks.value = Array.isArray(taskList) ? taskList.filter(task => Number.isInteger(task.id)) : []
+    networkQualityTasks.value = Array.isArray(networkTaskList)
+      ? networkTaskList.filter(task => Number.isInteger(task.id) && task.id > 0)
+      : []
     ensureNodeSelections()
+    ensureNetworkQualitySelections()
   }
   catch (cause) {
     error.value = cause instanceof Error ? cause.message : '设置加载失败'
@@ -720,6 +769,95 @@ onMounted(loadSettings)
                     />
                   </button>
                 </span>
+              </div>
+            </div>
+
+            <div class="space-y-4 rounded-md border border-border bg-card p-4">
+              <div>
+                <h3 class="text-sm font-semibold">
+                  首页卡片综合网络分
+                </h3>
+                <p class="mt-1 text-xs leading-5 text-muted-foreground">
+                  评分来自服务器预计算快照；轮播只切换已缓存结果，不会增加节点检测频率。
+                </p>
+              </div>
+
+              <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                <label class="space-y-1 text-sm">
+                  <span>展示方式</span>
+                  <select v-model="settings.homeNetworkScoreMode" class="h-9 w-full rounded-md border border-border bg-background px-3">
+                    <option value="carousel">自动轮播</option>
+                    <option value="fixed">固定一个任务</option>
+                    <option value="off">不显示</option>
+                  </select>
+                </label>
+                <label v-if="settings.homeNetworkScoreMode !== 'off'" class="space-y-1 text-sm">
+                  <span>评分时间窗口</span>
+                  <select v-model.number="settings.homeNetworkScoreHours" class="h-9 w-full rounded-md border border-border bg-background px-3">
+                    <option :value="1">1 小时</option><option :value="6">6 小时</option><option :value="12">12 小时</option>
+                    <option :value="24">1 天</option><option :value="72">3 天</option><option :value="168">7 天</option>
+                  </select>
+                </label>
+                <label v-if="settings.homeNetworkScoreMode === 'carousel'" class="space-y-1 text-sm">
+                  <span>轮播间隔</span>
+                  <span class="flex items-center gap-2">
+                    <input v-model.number="settings.homeNetworkScoreCarouselSeconds" type="number" min="3" max="60" step="1" class="h-9 min-w-0 flex-1 rounded-md border border-border bg-background px-3">
+                    <span class="shrink-0 text-muted-foreground">秒</span>
+                  </span>
+                </label>
+                <label v-if="settings.homeNetworkScoreMode === 'fixed'" class="space-y-1 text-sm sm:col-span-2">
+                  <span>固定展示任务</span>
+                  <select v-model="settings.homeNetworkScoreFixedTaskId" class="h-9 w-full rounded-md border border-border bg-background px-3">
+                    <option :value="null">请选择任务</option>
+                    <option v-for="task in networkQualityTasks" :key="task.id" :value="task.id">
+                      {{ task.name }}
+                    </option>
+                  </select>
+                </label>
+              </div>
+
+              <div v-if="settings.homeNetworkScoreMode === 'carousel'" class="space-y-2">
+                <div class="flex items-center justify-between gap-3">
+                  <span class="text-sm font-medium">轮播任务与顺序</span>
+                  <span class="text-xs text-muted-foreground">未选择时轮播全部任务</span>
+                </div>
+                <div v-if="!networkQualityTasks.length" class="rounded-md border border-dashed border-border px-3 py-6 text-center text-sm text-muted-foreground">
+                  暂无可用的综合网络质量任务
+                </div>
+                <template v-else>
+                  <div
+                    v-for="task in orderedNetworkQualityTasks"
+                    :key="task.id"
+                    class="grid min-h-11 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-md border border-border/70 bg-background px-3 py-2"
+                    :class="!isNetworkQualityTaskSelected(task.id) ? 'opacity-60' : ''"
+                  >
+                    <label class="flex min-w-0 items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        :checked="isNetworkQualityTaskSelected(task.id)"
+                        class="size-4 accent-primary"
+                        @change="toggleNetworkQualityTask(task.id)"
+                      >
+                      <span class="truncate" :title="task.name">{{ task.name }}</span>
+                    </label>
+                    <span class="flex items-center gap-1">
+                      <button
+                        type="button" title="上移" class="size-8 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30"
+                        :disabled="!settings.homeNetworkScoreTaskIds.length || !selectedNetworkQualityTaskIds.has(task.id) || settings.homeNetworkScoreTaskIds.indexOf(task.id) === 0"
+                        @click="moveNetworkQualityTask(task.id, -1)"
+                      >
+                        <Icon icon="lucide:chevron-up" class="mx-auto" width="16" height="16" />
+                      </button>
+                      <button
+                        type="button" title="下移" class="size-8 rounded-md text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-30"
+                        :disabled="!settings.homeNetworkScoreTaskIds.length || !selectedNetworkQualityTaskIds.has(task.id) || settings.homeNetworkScoreTaskIds.indexOf(task.id) === settings.homeNetworkScoreTaskIds.length - 1"
+                        @click="moveNetworkQualityTask(task.id, 1)"
+                      >
+                        <Icon icon="lucide:chevron-down" class="mx-auto" width="16" height="16" />
+                      </button>
+                    </span>
+                  </div>
+                </template>
               </div>
             </div>
 
@@ -1183,10 +1321,10 @@ onMounted(loadSettings)
             <header class="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <h2 class="text-base font-semibold">
-                  TCP 连接质量评分
+                  综合网络质量评分
                 </h2>
                 <p class="mt-1 text-sm text-muted-foreground">
-                  服务端后台预计算综合分；访客只读取缓存，不会触发 nping 或全量统计。
+                  每个目录目标独立评分，服务端合并 ICMP 与 TCP 后预计算；访客只读取缓存。
                 </p>
               </div>
               <button type="button" class="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-background px-3 text-sm hover:bg-muted" @click="resetTCPQualityScoreSettings">
@@ -1271,11 +1409,9 @@ onMounted(loadSettings)
 
             <div class="rounded-md border border-border bg-card p-4">
               <h3 class="mb-3 text-sm font-semibold">
-                多目标汇总与有效性门槛
+                有效性门槛
               </h3>
               <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                <label class="space-y-1 text-sm"><span>目标均值权重（%）</span><input v-model.number="settings.tcpProfileMeanWeight" type="number" min="0" max="100" class="h-9 w-full rounded-md border border-border bg-background px-3"></label>
-                <label class="space-y-1 text-sm"><span>较差目标 P20 权重（%）</span><input v-model.number="settings.tcpProfileP20Weight" type="number" min="0" max="100" class="h-9 w-full rounded-md border border-border bg-background px-3"></label>
                 <label class="space-y-1 text-sm"><span>最少完整运行次数</span><input v-model.number="settings.tcpMinimumRuns" type="number" min="1" max="20" class="h-9 w-full rounded-md border border-border bg-background px-3"></label>
                 <label class="space-y-1 text-sm"><span>目标最低覆盖率（%）</span><input v-model.number="settings.tcpMinimumTargetCoverage" type="number" min="1" max="100" class="h-9 w-full rounded-md border border-border bg-background px-3"></label>
                 <label class="space-y-1 text-sm"><span>标准 SYN 最少样本</span><input v-model.number="settings.tcpMinimumStandardSamples" type="number" min="10" max="10000" class="h-9 w-full rounded-md border border-border bg-background px-3"></label>

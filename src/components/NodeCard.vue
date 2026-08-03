@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { NodeData } from '@/stores/nodes'
+import type { NetworkQualitySummaryTask } from '@/utils/tcpQuality'
 import { Icon } from '@iconify/vue'
 import { computed } from 'vue'
 import { Badge } from '@/components/ui/badge'
@@ -14,11 +15,12 @@ import { getOSImage, getOSName } from '@/utils/osImageHelper'
 import { getFlagSrc, getRegionDisplayName } from '@/utils/regionHelper'
 import { formatPriceWithCycle, getDaysUntilExpired, getExpireStatus, getExpireTextClass, parseTags } from '@/utils/tagHelper'
 
-const props = defineProps<{ node: NodeData }>()
+const props = defineProps<{ node: NodeData, networkScoreTask?: NetworkQualitySummaryTask | null, networkScoreLoading?: boolean }>()
 
 const emit = defineEmits<{
   click: []
   pingClick: [node: NodeData]
+  networkScoreClick: [taskId: number]
 }>()
 
 const appStore = useAppStore()
@@ -112,6 +114,32 @@ const remainingTimeTagClass = computed(() => {
 })
 
 const customTags = computed(() => parseTags(props.node.tags).map(t => t.text))
+const showNetworkScore = computed(() => appStore.themeSettings.homeNetworkScoreMode !== 'off')
+const networkScoreNode = computed(() => props.networkScoreTask?.nodes.find(node => node.uuid === props.node.uuid) ?? null)
+const networkScoreStatus = computed(() => {
+  const node = networkScoreNode.value
+  if (!props.networkScoreTask) {
+    return props.networkScoreLoading
+      ? { text: '读取中', title: '正在读取后台预计算评分', className: 'text-muted-foreground' }
+      : { text: '未配置', title: '暂无可展示的综合网络质量任务', className: 'text-muted-foreground' }
+  }
+  if (!node)
+    return { text: '未参与', title: '该节点未加入当前网络质量任务', className: 'text-muted-foreground' }
+  if (!node.rankable || node.overall_score === null)
+    return { text: '数据不足', title: node.reason || '样本数量或覆盖率暂不足', className: 'text-amber-600 dark:text-amber-400' }
+  const total = props.networkScoreTask.valid_nodes
+  return {
+    text: `#${node.rank ?? '-'}/${total} · ${node.overall_score.toFixed(1)} ${node.grade}`,
+    title: `综合网络分 ${node.overall_score.toFixed(1)}，当前任务排名 ${node.rank}/${total}`,
+    className: node.grade === '优秀'
+      ? 'text-emerald-700 dark:text-emerald-400'
+      : node.grade === '良好'
+        ? 'text-lime-700 dark:text-lime-400'
+        : node.grade === '一般'
+          ? 'text-amber-700 dark:text-amber-400'
+          : 'text-red-700 dark:text-red-400',
+  }
+})
 
 function hasRegion(region: string | null | undefined): boolean {
   return Boolean(region?.trim())
@@ -309,6 +337,22 @@ function openPingDialog() {
                 </span>
               </DataTooltip>
             </div>
+            <DataTooltip v-if="showNetworkScore" placement="top" :content="networkScoreStatus.title" class="block">
+              <button
+                type="button"
+                class="grid h-8 w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-2 border-y border-dashed border-border/60 text-left transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                :disabled="!props.networkScoreTask"
+                @click.stop="props.networkScoreTask && emit('networkScoreClick', props.networkScoreTask.id)"
+              >
+                <span class="flex min-w-0 items-center gap-1.5 truncate text-[11px] text-muted-foreground">
+                  <Icon icon="lucide:gauge" width="13" height="13" class="shrink-0 text-emerald-600" />
+                  <span class="truncate">{{ props.networkScoreTask?.name || '网络质量' }}</span>
+                </span>
+                <span class="shrink-0 text-[11px] font-semibold" :class="networkScoreStatus.className">
+                  {{ networkScoreStatus.text }}
+                </span>
+              </button>
+            </DataTooltip>
             <div class="flex flex-col gap-y-2">
               <div
                 v-for="task in pingTaskDisplays" :key="task.key"

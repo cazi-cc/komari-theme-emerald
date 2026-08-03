@@ -15,14 +15,19 @@ const router = createRouter({
       component: () => import('@/views/InstanceDetail.vue'),
     },
     {
+      path: '/network-quality',
+      name: 'network-quality',
+      component: () => import('@/views/NetworkQuality.vue'),
+    },
+    {
       path: '/network-comparison',
       name: 'network-comparison',
-      component: () => import('@/views/NetworkComparison.vue'),
+      redirect: to => ({ name: 'network-quality', query: { ...to.query, view: 'icmp' } }),
     },
     {
       path: '/tcp-quality',
       name: 'tcp-quality',
-      component: () => import('@/views/TCPQuality.vue'),
+      redirect: to => ({ name: 'network-quality', query: to.query }),
     },
     {
       path: '/unlock-quality',

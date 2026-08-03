@@ -23,6 +23,8 @@ import {
 } from '@/utils/tcpQuality'
 import '@/utils/echarts'
 
+const viewProps = withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false })
+
 type ViewSection = 'ranking' | 'distribution' | 'trend' | 'targets'
 type TrendMetric = 'p50' | 'p95' | 'loss'
 
@@ -98,6 +100,9 @@ async function loadData(force = false): Promise<void> {
   error.value = ''
   try {
     tasks.value = await loadTCPQualityTasks(force)
+    const requestedTask = Number(router.currentRoute.value.query.task)
+    if (Number.isInteger(requestedTask) && tasks.value.some(task => task.id === requestedTask))
+      selectedTaskId.value = requestedTask
     if (!tasks.value.some(task => task.id === selectedTaskId.value))
       selectedTaskId.value = tasks.value[0]?.id ?? null
     if (selectedTaskId.value !== null)
@@ -116,6 +121,9 @@ async function loadData(force = false): Promise<void> {
 watch([selectedTaskId, selectedHours], async ([taskId], [oldTaskId]) => {
   if (taskId === null)
     return
+  if (Number(router.currentRoute.value.query.task) !== taskId) {
+    void router.replace({ query: { ...router.currentRoute.value.query, task: String(taskId), pingTask: undefined } })
+  }
   if (taskId === oldTaskId && loading.value)
     return
   loading.value = true
@@ -267,17 +275,17 @@ onMounted(() => loadData())
 
 <template>
   <main class="mx-auto w-full max-w-[1280px] px-4 pb-10">
-    <div class="mb-4 flex items-center justify-between gap-3">
+    <div v-if="!viewProps.embedded" class="mb-4 flex items-center justify-between gap-3">
       <div class="flex min-w-0 items-center gap-3">
         <Button variant="ghost" size="icon-sm" aria-label="返回首页" @click="router.push('/')">
           <Icon icon="lucide:arrow-left" width="18" height="18" />
         </Button>
         <div class="min-w-0">
           <h1 class="text-xl font-semibold">
-            TCP 连接质量
+            综合网络质量
           </h1>
           <p class="text-sm text-muted-foreground">
-            以国内省份与运营商任务为视角，对比各节点 TCP SYN 首包响应
+            综合 ICMP 延迟、丢包与 TCP SYN 首次响应，对比各节点真实线路体验
           </p>
         </div>
       </div>
@@ -288,7 +296,7 @@ onMounted(() => loadData())
 
     <section class="mb-5 grid gap-4 rounded-md border bg-card/90 p-4 md:grid-cols-[minmax(0,1fr)_auto]">
       <label class="min-w-0">
-        <span class="mb-1.5 block text-xs text-muted-foreground">TCP 质量任务</span>
+        <span class="mb-1.5 block text-xs text-muted-foreground">网络质量任务</span>
         <select
           v-model.number="selectedTaskId"
           class="h-10 w-full rounded-md border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring"

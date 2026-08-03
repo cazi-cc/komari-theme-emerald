@@ -1,14 +1,14 @@
 export const THEME_SHORT = 'Emerald-Cazi'
 export const MAX_HOME_PING_TASKS = 8
 export const NETWORK_SCORE_MODEL_VERSION = 2
-export const TCP_QUALITY_SCORE_MODEL_VERSION = 3
+export const TCP_QUALITY_SCORE_MODEL_VERSION = 4
 
 export type PingChartLayout = 'combined' | 'split'
-export type HomeAnalysisEntry = 'network-comparison' | 'tcp-quality' | 'unlock-quality'
+export type HomeAnalysisEntry = 'network-quality' | 'unlock-quality'
+export type HomeNetworkScoreMode = 'off' | 'carousel' | 'fixed'
 
 export const HOME_ANALYSIS_ENTRIES: readonly HomeAnalysisEntry[] = [
-  'network-comparison',
-  'tcp-quality',
+  'network-quality',
   'unlock-quality',
 ]
 
@@ -56,6 +56,11 @@ export interface ThemeSettings {
   homePingTasksByNode: Record<string, number[]>
   homePingRowCount: number
   homePingHistoryHours: number
+  homeNetworkScoreMode: HomeNetworkScoreMode
+  homeNetworkScoreTaskIds: number[]
+  homeNetworkScoreFixedTaskId: number | null
+  homeNetworkScoreHours: number
+  homeNetworkScoreCarouselSeconds: number
   pingTaskColors: Record<string, string>
   pingExcellentColor: string
   pingGoodColor: string
@@ -142,6 +147,11 @@ export const DEFAULT_THEME_SETTINGS: ThemeSettings = {
   homePingTasksByNode: {},
   homePingRowCount: 2,
   homePingHistoryHours: 1,
+  homeNetworkScoreMode: 'carousel',
+  homeNetworkScoreTaskIds: [],
+  homeNetworkScoreFixedTaskId: null,
+  homeNetworkScoreHours: 12,
+  homeNetworkScoreCarouselSeconds: 5,
   pingTaskColors: {},
   pingExcellentColor: '#5EEAA6',
   pingGoodColor: '#47B592',
@@ -262,10 +272,19 @@ function readHomeAnalysisEntries(value: unknown): HomeAnalysisEntry[] {
   if (!Array.isArray(value))
     return [...DEFAULT_THEME_SETTINGS.homeAnalysisEntries]
 
-  const validEntries = new Set<HomeAnalysisEntry>(HOME_ANALYSIS_ENTRIES)
-  return [...new Set(value.filter(
-    (entry): entry is HomeAnalysisEntry => typeof entry === 'string' && validEntries.has(entry as HomeAnalysisEntry),
-  ))]
+  const result: HomeAnalysisEntry[] = []
+  for (const entry of value) {
+    const normalized = entry === 'network-comparison' || entry === 'tcp-quality' ? 'network-quality' : entry
+    if ((normalized === 'network-quality' || normalized === 'unlock-quality') && !result.includes(normalized))
+      result.push(normalized)
+  }
+  return result
+}
+
+function readTaskIds(value: unknown): number[] {
+  if (!Array.isArray(value))
+    return []
+  return [...new Set(value.filter((item): item is number => typeof item === 'number' && Number.isInteger(item) && item > 0))]
 }
 
 function readColorMap(value: unknown): Record<string, string> {
@@ -356,6 +375,15 @@ export function normalizeThemeSettings(value: unknown): ThemeSettings {
     homePingTasksByNode: readTaskMap(source.homePingTasksByNode),
     homePingRowCount: Math.round(clampNumber(source.homePingRowCount, DEFAULT_THEME_SETTINGS.homePingRowCount, 1, MAX_HOME_PING_TASKS)),
     homePingHistoryHours: Math.round(clampNumber(source.homePingHistoryHours, DEFAULT_THEME_SETTINGS.homePingHistoryHours, 1, 168)),
+    homeNetworkScoreMode: source.homeNetworkScoreMode === 'off' || source.homeNetworkScoreMode === 'fixed' ? source.homeNetworkScoreMode : 'carousel',
+    homeNetworkScoreTaskIds: readTaskIds(source.homeNetworkScoreTaskIds),
+    homeNetworkScoreFixedTaskId: typeof source.homeNetworkScoreFixedTaskId === 'number' && Number.isInteger(source.homeNetworkScoreFixedTaskId) && source.homeNetworkScoreFixedTaskId > 0
+      ? source.homeNetworkScoreFixedTaskId
+      : null,
+    homeNetworkScoreHours: typeof source.homeNetworkScoreHours === 'number' && VALID_CHART_HOURS.has(source.homeNetworkScoreHours)
+      ? source.homeNetworkScoreHours
+      : DEFAULT_THEME_SETTINGS.homeNetworkScoreHours,
+    homeNetworkScoreCarouselSeconds: Math.round(clampNumber(source.homeNetworkScoreCarouselSeconds, DEFAULT_THEME_SETTINGS.homeNetworkScoreCarouselSeconds, 3, 60)),
     pingTaskColors: readColorMap(source.pingTaskColors),
     pingExcellentColor: readColor(source.pingExcellentColor, DEFAULT_THEME_SETTINGS.pingExcellentColor),
     pingGoodColor: readColor(source.pingGoodColor, DEFAULT_THEME_SETTINGS.pingGoodColor),

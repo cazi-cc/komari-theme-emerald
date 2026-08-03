@@ -12,6 +12,7 @@ import { Empty } from '@/components/ui/empty'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useBackgroundSurface } from '@/composables/useBackgroundSurface'
+import { useHomeNetworkScore } from '@/composables/useHomeNetworkScore'
 import { useAppStore } from '@/stores/app'
 import { useNodesStore } from '@/stores/nodes'
 import { isNodeInGroup, parseNodeGroups } from '@/utils/groupHelper'
@@ -27,17 +28,11 @@ const PingChart = defineAsyncComponent(() => import('@/components/PingChart.vue'
 const nodeItemStaggerMs = 35
 const nodeItemStaggerLimit = 12
 const analysisEntryCatalog = {
-  'network-comparison': {
-    label: '线路对比',
-    description: '按延迟任务，对比不同节点到同一目标的 ICMP 网络质量',
-    icon: 'lucide:route',
-    route: 'network-comparison',
-  },
-  'tcp-quality': {
-    label: 'TCP 质量',
-    description: '对比各节点 TCP SYN 首次响应与大小包实验指标',
+  'network-quality': {
+    label: '网络质量',
+    description: '结合 ICMP 延迟、丢包与 TCP 首次响应，对比真实线路体验',
     icon: 'lucide:gauge',
-    route: 'tcp-quality',
+    route: 'network-quality',
   },
   'unlock-quality': {
     label: 'ChatGPT 解锁线路',
@@ -51,6 +46,7 @@ const appStore = useAppStore()
 const { pickSurfaceClass } = useBackgroundSurface()
 const nodesStore = useNodesStore()
 const router = useRouter()
+const { currentTask: homeNetworkScoreTask, loading: homeNetworkScoreLoading } = useHomeNetworkScore()
 const homeAnalysisEntries = computed(() => appStore.themeSettings.homeAnalysisEntries.map(key => ({
   key,
   ...analysisEntryCatalog[key],
@@ -113,6 +109,10 @@ function isNodeMatchSearch(node: typeof nodesStore.nodes[number], search: string
   if (node.remark && node.remark.toLowerCase().includes(lowerSearch))
     return true
   return false
+}
+
+function openNetworkQuality(taskId: number) {
+  router.push({ name: 'network-quality', query: { task: String(taskId) } })
 }
 
 const groupNodeList = computed(() => {
@@ -189,7 +189,7 @@ function getNodeItemTransitionStyle(index: number): Record<string, string> {
 
     <div
       v-if="homeAnalysisEntries.length"
-      class="grid grid-cols-1 gap-3 px-4 pb-4 lg:grid-cols-3"
+      class="grid grid-cols-1 gap-3 px-4 pb-4 sm:grid-cols-2"
     >
       <button
         v-for="entry in homeAnalysisEntries"
@@ -282,7 +282,10 @@ function getNodeItemTransitionStyle(index: number): Record<string, string> {
                 class="min-w-0"
                 :style="getNodeItemTransitionStyle(index)"
               >
-                <NodeCard :node="node" @click="handleNodeClick(node)" @ping-click="handlePingClick" />
+                <NodeCard
+                  :node="node" :network-score-task="homeNetworkScoreTask" :network-score-loading="homeNetworkScoreLoading"
+                  @click="handleNodeClick(node)" @ping-click="handlePingClick" @network-score-click="openNetworkQuality"
+                />
               </div>
             </TransitionGroup>
             <NodeList

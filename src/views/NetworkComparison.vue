@@ -12,7 +12,7 @@ import { useMediaQuery } from '@vueuse/core'
 import dayjs from 'dayjs'
 import { computed, onMounted, ref, watch } from 'vue'
 import VChart from 'vue-echarts'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Empty } from '@/components/ui/empty'
@@ -31,6 +31,8 @@ import {
 } from '@/utils/networkComparison'
 import '@/utils/echarts'
 
+const viewProps = withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false })
+
 type MobileSection = 'ranking' | 'distribution' | 'trend' | 'details'
 type TrendMetric = 'latency' | 'loss'
 interface RangeRenderParams {
@@ -42,6 +44,7 @@ interface RangeRenderApi {
 }
 
 const router = useRouter()
+const route = useRoute()
 const appStore = useAppStore()
 const nodesStore = useNodesStore()
 const { pickSurfaceClass } = useBackgroundSurface()
@@ -210,6 +213,11 @@ function formatDiagnosticSamples(diagnostic: NetworkProbeDiagnostic | undefined)
 
 function ensureSelectedTask(): void {
   const tasks = windowData.value?.tasks ?? []
+  const requestedTask = Number(route.query.pingTask ?? route.query.task)
+  if (selectedTaskId.value === null && Number.isInteger(requestedTask) && tasks.some(task => task.id === requestedTask)) {
+    selectedTaskId.value = requestedTask
+    return
+  }
   if (!tasks.some(task => task.id === selectedTaskId.value))
     selectedTaskId.value = tasks.find(task => task.ranking_available)?.id ?? tasks[0]?.id ?? null
 }
@@ -559,7 +567,7 @@ onMounted(() => {
 
 <template>
   <div class="space-y-4 px-4 pb-4">
-    <header class="flex min-w-0 items-center gap-3">
+    <header v-if="!viewProps.embedded" class="flex min-w-0 items-center gap-3">
       <Button variant="ghost" size="icon-sm" class="shrink-0 bg-background/60" aria-label="返回首页" @click="router.push('/')">
         <Icon icon="lucide:arrow-left" :width="16" :height="16" />
       </Button>

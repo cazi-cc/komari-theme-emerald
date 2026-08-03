@@ -7,6 +7,7 @@ export interface TCPQualityPublicTask {
   isp_codes: string[]
   ip_versions: string[]
   large_enabled: boolean
+  icmp_task_id: number
 }
 
 export interface TCPQualityTargetLabel {
@@ -84,8 +85,35 @@ export interface TCPQualitySnapshot {
   privacy: string
 }
 
+export interface NetworkQualitySummaryNode {
+  uuid: string
+  name: string
+  rank: number | null
+  grade: string
+  rankable: boolean
+  reason?: string
+  overall_score: number | null
+  icmp_score: number | null
+  tcp_score: number | null
+}
+
+export interface NetworkQualitySummaryTask {
+  id: number
+  name: string
+  generated_at: string
+  valid_nodes: number
+  nodes: NetworkQualitySummaryNode[]
+}
+
+export interface NetworkQualitySummary {
+  window_hours: number
+  generated_at: string
+  tasks: NetworkQualitySummaryTask[]
+}
+
 let publicTaskCache: Promise<TCPQualityPublicTask[]> | null = null
 const snapshotCache = new Map<string, Promise<TCPQualitySnapshot>>()
+const summaryCache = new Map<number, { expiresAt: number, request: Promise<NetworkQualitySummary> }>()
 
 export function loadTCPQualityTasks(force = false): Promise<TCPQualityPublicTask[]> {
   if (force)
@@ -114,6 +142,22 @@ export function loadTCPQualitySnapshot(taskId: number, windowHours: number, forc
     throw error
   })
   snapshotCache.set(key, request)
+  return request
+}
+
+export function loadNetworkQualitySummary(windowHours: number, force = false): Promise<NetworkQualitySummary> {
+  if (force)
+    summaryCache.delete(windowHours)
+  const cached = summaryCache.get(windowHours)
+  if (cached && cached.expiresAt > Date.now())
+    return cached.request
+  const request = getSharedRpc().getClient().call<NetworkQualitySummary>('public:getPublicNetworkQualitySummary', {
+    window_hours: windowHours,
+  }).catch((error) => {
+    summaryCache.delete(windowHours)
+    throw error
+  })
+  summaryCache.set(windowHours, { expiresAt: Date.now() + 5 * 60 * 1000, request })
   return request
 }
 

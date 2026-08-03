@@ -17,14 +17,9 @@ const siteFavicon = ref('/favicon.ico')
 const actionButtons = computed(() => {
   const buttons = [
     {
-      title: 'TCP 质量',
+      title: '网络质量',
       icon: 'lucide:gauge',
-      action: 'tcpQuality',
-    },
-    {
-      title: '线路对比',
-      icon: 'lucide:route',
-      action: 'networkComparison',
+      action: 'networkQuality',
     },
     {
       title: appStore.themeMode === 'auto' ? '自动主题' : appStore.themeMode === 'light' ? '浅色主题' : '深色主题',
@@ -48,11 +43,8 @@ function handleButtonClick(action: string) {
     case 'toggleTheme':
       appStore.updateThemeMode()
       break
-    case 'networkComparison':
-      router.push({ name: 'network-comparison' })
-      break
-    case 'tcpQuality':
-      router.push({ name: 'tcp-quality' })
+    case 'networkQuality':
+      router.push({ name: 'network-quality' })
       break
     case 'jumpToSetting':
       location.href = '/admin'
