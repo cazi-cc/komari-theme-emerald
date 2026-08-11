@@ -1053,15 +1053,24 @@ onMounted(loadSettings)
                   仅管理员可见。记录保留 30 天，归属地由服务器查询并缓存；IP 定位是数据库估算，不能精确到住址。
                 </p>
               </div>
-              <button
-                type="button"
-                class="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-background px-3 text-sm hover:bg-muted disabled:opacity-50"
-                :disabled="visitorLoading"
-                @click="loadVisitorLogs(visitorPage)"
-              >
-                <Icon icon="lucide:refresh-cw" :class="visitorLoading && 'animate-spin'" width="15" height="15" />
-                刷新
-              </button>
+              <div class="flex flex-wrap gap-2">
+                <a
+                  href="/admin/notification/visitor"
+                  class="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-background px-3 text-sm hover:bg-muted"
+                >
+                  <Icon icon="lucide:bell" width="15" height="15" />
+                  通知与 IP 规则
+                </a>
+                <button
+                  type="button"
+                  class="inline-flex h-9 items-center gap-2 rounded-md border border-border bg-background px-3 text-sm hover:bg-muted disabled:opacity-50"
+                  :disabled="visitorLoading"
+                  @click="loadVisitorLogs(visitorPage)"
+                >
+                  <Icon icon="lucide:refresh-cw" :class="visitorLoading && 'animate-spin'" width="15" height="15" />
+                  刷新
+                </button>
+              </div>
             </header>
 
             <div v-if="visitorError" class="rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-600 dark:text-red-400">
@@ -1069,66 +1078,6 @@ onMounted(loadSettings)
             </div>
             <div v-if="visitorSecuritySuccess" class="rounded-md border border-primary/30 bg-primary/10 px-3 py-2 text-sm text-primary">
               {{ visitorSecuritySuccess }}
-            </div>
-
-            <div class="space-y-4 rounded-md border border-border bg-card p-4">
-              <div class="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <h3 class="text-sm font-semibold">
-                    通知与访问控制
-                  </h3>
-                  <p class="mt-1 text-xs leading-5 text-muted-foreground">
-                    新 IP 首次来访时发送 Telegram；已登录管理员、私有地址和免通知白名单不会提醒。支持单个 IP 或 CIDR 网段，每行一条。
-                  </p>
-                </div>
-                <label class="flex items-center gap-2 text-sm">
-                  <input v-model="visitorSecurity.notification_enabled" type="checkbox" class="size-4 accent-primary">
-                  新访客 Telegram 通知
-                </label>
-              </div>
-
-              <div class="grid gap-4 lg:grid-cols-2">
-                <label class="space-y-1 text-sm">
-                  <span>同一 IP 提醒间隔（分钟）</span>
-                  <input
-                    v-model.number="visitorSecurity.notification_cooldown_minutes"
-                    type="number" min="1" max="10080"
-                    class="h-9 w-full rounded-md border border-border bg-background px-3"
-                  >
-                  <span class="block text-xs text-muted-foreground">默认 1440 分钟，即 24 小时内只提醒一次。</span>
-                </label>
-                <div class="rounded-md border border-border/70 bg-background px-3 py-2 text-xs leading-5 text-muted-foreground">
-                  封禁规则在内存中匹配，不会为每次访问查询数据库。当前管理员 IP 不能加入封禁名单，避免误锁后台。
-                </div>
-                <label class="space-y-1 text-sm">
-                  <span>免通知 IP 白名单</span>
-                  <textarea
-                    v-model="visitorSecurity.notification_whitelist" rows="6"
-                    placeholder="例如：203.0.113.8&#10;2001:db8::/32"
-                    class="w-full resize-y rounded-md border border-border bg-background p-3 font-mono text-xs"
-                  />
-                </label>
-                <label class="space-y-1 text-sm">
-                  <span>封禁 IP 名单</span>
-                  <textarea
-                    v-model="visitorSecurity.ip_blocklist" rows="6"
-                    placeholder="例如：198.51.100.25&#10;2001:db8:1::/48"
-                    class="w-full resize-y rounded-md border border-border bg-background p-3 font-mono text-xs"
-                  />
-                </label>
-              </div>
-
-              <div class="flex justify-end">
-                <button
-                  type="button"
-                  class="inline-flex h-9 items-center gap-2 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-                  :disabled="visitorSecuritySaving"
-                  @click="saveVisitorSecuritySettings()"
-                >
-                  <Icon :icon="visitorSecuritySaving ? 'lucide:loader-circle' : 'lucide:shield-check'" :class="visitorSecuritySaving && 'animate-spin'" width="16" height="16" />
-                  {{ visitorSecuritySaving ? '正在保存' : '保存访客安全设置' }}
-                </button>
-              </div>
             </div>
 
             <div class="overflow-hidden rounded-md border border-border bg-card">
