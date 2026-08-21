@@ -82,6 +82,7 @@ jobs:
               echo 'src/views/TCPQuality.vue'
               echo 'src/utils/unlockQuality.ts'
               echo 'src/utils/tcpQuality.ts'
+              echo 'src/components/NodeCard.vue'
               echo 'src/views/ThemeSettingsApp.vue'
               echo 'README.md'
               echo '.github/workflows/sync-upstream.yml'
@@ -115,6 +116,7 @@ jobs:
             src/views/TCPQuality.vue \
             src/utils/unlockQuality.ts \
             src/utils/tcpQuality.ts \
+            src/components/NodeCard.vue \
             src/views/ThemeSettingsApp.vue \
             README.md \
             .github/workflows/sync-upstream.yml)"
@@ -159,6 +161,7 @@ jobs:
           src/views/TCPQuality.vue
           src/utils/unlockQuality.ts
           src/utils/tcpQuality.ts
+          src/components/NodeCard.vue
           src/views/ThemeSettingsApp.vue
           README.md
           .github/workflows/sync-upstream.yml

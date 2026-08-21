@@ -321,7 +321,7 @@ function openPingDialog() {
               <div class="border-t-2 border-dotted border-gray-500/10 mx-2 flex-1" />
               <DataTooltip placement="left" :content="expiredDate" content-class="whitespace-nowrap right-0 mr-0">
                 <span class="truncate flex flex-row gap-1">
-                  <template v-for="(tag, index) in priceTags" :key="tag">
+                  <template v-for="(tag, index) in priceTags" :key="`${tag.text}-${index}`">
                     <span class="inline-flex flex-row gap-1 items-center">
                       <template v-if="tag.highlightValue">
                         <span>{{ tag.prefix }}</span>
@@ -332,7 +332,7 @@ function openPingDialog() {
                         {{ tag.text }}
                       </template>
                     </span>
-                    <span v-if="index < priceTags.length - 1" :key="`${tag}-${index}`">·</span>
+                    <span v-if="index < priceTags.length - 1">·</span>
                   </template>
                 </span>
               </DataTooltip>
