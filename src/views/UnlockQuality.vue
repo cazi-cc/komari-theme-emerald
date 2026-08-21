@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import type { NetworkComparisonManifest, NetworkComparisonWindow } from '@/utils/networkComparison'
+import type { EstimatedUnlockPath } from '@/utils/unlockPathQuality'
 import type {
   UnlockQualityPublicTask,
   UnlockQualityRouteSummary,
@@ -17,6 +19,8 @@ import { Empty } from '@/components/ui/empty'
 import { Spinner } from '@/components/ui/spinner'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useAppStore } from '@/stores/app'
+import { loadNetworkComparisonManifest, loadNetworkComparisonWindow } from '@/utils/networkComparison'
+import { buildEstimatedUnlockPaths } from '@/utils/unlockPathQuality'
 import {
   formatUnlockQualityPercent,
   formatUnlockQualityScore,
@@ -28,7 +32,7 @@ import '@/utils/echarts'
 
 type ViewSection = 'ranking' | 'distribution' | 'trend' | 'details'
 type TrendMetric = 'p50' | 'p95' | 'min' | 'max' | 'failure'
-type RoutePerspective = 'system' | 'relay'
+type AnalysisMode = 'direct' | 'path'
 
 interface RouteNodeEntry {
   node: UnlockQualitySnapshotNode
@@ -44,7 +48,12 @@ const selectedTaskId = ref<number | null>(null)
 const selectedHours = ref(appStore.themeSettings.unlockQualityDefaultHours)
 const activeSection = ref<ViewSection>('ranking')
 const trendMetric = ref<TrendMetric>('p50')
-const routePerspective = ref<RoutePerspective>('system')
+const analysisMode = ref<AnalysisMode>('direct')
+const pathManifest = ref<NetworkComparisonManifest | null>(null)
+const pathWindow = ref<NetworkComparisonWindow | null>(null)
+const selectedEntryUUID = ref('')
+const pathLoading = ref(false)
+const pathError = ref('')
 const loading = ref(true)
 const error = ref('')
 
@@ -66,11 +75,10 @@ const trendMetricOptions: Array<{ value: TrendMetric, label: string }> = [
 const chartColors = ['#059669', '#2563EB', '#F97316', '#DB2777', '#7C3AED', '#0891B2', '#65A30D', '#DC2626']
 
 const selectedTask = computed(() => tasks.value.find(task => task.id === selectedTaskId.value) ?? null)
-const hasRelay = computed(() => (snapshot.value?.nodes ?? []).some(node => node.relay !== undefined))
 const routeEntries = computed<RouteNodeEntry[]>(() => {
   const entries = (snapshot.value?.nodes ?? []).map(node => ({
     node,
-    route: routePerspective.value === 'relay' ? node.relay ?? null : node.system,
+    route: node.system,
     rank: null as number | null,
   }))
   entries.sort((left, right) => {
@@ -96,12 +104,27 @@ const bestEntry = computed(() => routeEntries.value.find(entry => entry.rank ===
 const bestNode = computed(() => bestEntry.value?.node ?? null)
 const validNodes = computed(() => routeEntries.value.filter(entry => entry.route?.score !== null && entry.route?.score !== undefined).length)
 const availableNodes = computed(() => routeEntries.value.filter(entry => entry.route?.status === 'available').length)
-const relayedNodes = computed(() => (snapshot.value?.nodes ?? []).filter(node => node.relay !== undefined))
-const improvedRelayNodes = computed(() => relayedNodes.value.filter(node => (node.relay_score_gain ?? 0) > 0).length)
-const averageRelayGain = computed(() => {
-  const values = relayedNodes.value.map(node => node.relay_score_gain).filter((value): value is number => value !== undefined)
-  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null
+const entryOptions = computed(() => {
+  if (!snapshot.value || !pathWindow.value)
+    return []
+  const taskIDs = new Set(snapshot.value.path_bindings.map(binding => binding.ping_task_id))
+  const entries = new Map<string, { uuid: string, name: string }>()
+  for (const task of pathWindow.value.tasks) {
+    if (!taskIDs.has(task.id))
+      continue
+    for (const node of task.nodes) {
+      if (node.p50 !== null && !entries.has(node.uuid))
+        entries.set(node.uuid, { uuid: node.uuid, name: node.name })
+    }
+  }
+  return [...entries.values()].sort((left, right) => left.name.localeCompare(right.name, 'zh-CN'))
 })
+const estimatedPaths = computed<EstimatedUnlockPath[]>(() => {
+  if (!snapshot.value || !pathWindow.value)
+    return []
+  return buildEstimatedUnlockPaths(selectedEntryUUID.value, snapshot.value, pathWindow.value)
+})
+const bestEstimatedPath = computed(() => estimatedPaths.value.find(path => path.score !== null) ?? null)
 const generatedText = computed(() => snapshot.value?.generated_at ? dayjs(snapshot.value.generated_at).format('MM-DD HH:mm:ss') : '--')
 const chartTextColor = computed(() => appStore.isDark ? 'rgba(255,255,255,.68)' : 'rgba(15,23,42,.66)')
 const chartSplitColor = computed(() => appStore.isDark ? 'rgba(255,255,255,.08)' : 'rgba(15,23,42,.08)')
@@ -143,18 +166,12 @@ function statusClass(status: UnlockQualityStatus): string {
 
 function exitLabel(route: UnlockQualityRouteSummary | null): string {
   if (!route)
-    return '未配置中转监测'
+    return '出口信息待检测'
   const values = [
     route.exit_country && `出口 ${route.exit_country}`,
     route.edge_colo && `Cloudflare ${route.edge_colo}`,
   ].filter(Boolean)
   return values.join(' · ') || '出口信息待检测'
-}
-
-function signedMetric(value: number | undefined, suffix = ''): string {
-  if (value === undefined)
-    return '--'
-  return `${value > 0 ? '+' : ''}${value.toFixed(1)}${suffix}`
 }
 
 async function loadData(force = false): Promise<void> {
@@ -168,8 +185,8 @@ async function loadData(force = false): Promise<void> {
       snapshot.value = await loadUnlockQualitySnapshot(selectedTaskId.value, selectedHours.value, force)
     else
       snapshot.value = null
-    if (!hasRelay.value)
-      routePerspective.value = 'system'
+    if (analysisMode.value === 'path')
+      await loadPathData(force)
   }
   catch (cause) {
     error.value = cause instanceof Error ? cause.message : 'ChatGPT 解锁质量快照读取失败'
@@ -188,8 +205,8 @@ watch([selectedTaskId, selectedHours], async ([taskId], [oldTaskId]) => {
   error.value = ''
   try {
     snapshot.value = await loadUnlockQualitySnapshot(taskId, selectedHours.value)
-    if (!hasRelay.value)
-      routePerspective.value = 'system'
+    if (analysisMode.value === 'path')
+      await loadPathData()
   }
   catch (cause) {
     error.value = cause instanceof Error ? cause.message : 'ChatGPT 解锁质量快照读取失败'
@@ -197,6 +214,32 @@ watch([selectedTaskId, selectedHours], async ([taskId], [oldTaskId]) => {
   finally {
     loading.value = false
   }
+})
+
+async function loadPathData(force = false): Promise<void> {
+  if (!snapshot.value)
+    return
+  pathLoading.value = true
+  pathError.value = ''
+  try {
+    if (!pathManifest.value || force)
+      pathManifest.value = await loadNetworkComparisonManifest(force)
+    pathWindow.value = await loadNetworkComparisonWindow(pathManifest.value, selectedHours.value, force)
+    if (!entryOptions.value.some(entry => entry.uuid === selectedEntryUUID.value))
+      selectedEntryUUID.value = entryOptions.value[0]?.uuid ?? ''
+  }
+  catch (cause) {
+    pathError.value = cause instanceof Error ? cause.message : '组合线路快照读取失败'
+    pathWindow.value = null
+  }
+  finally {
+    pathLoading.value = false
+  }
+}
+
+watch(analysisMode, async (mode) => {
+  if (mode === 'path')
+    await loadPathData()
 })
 
 const distributionChartOption = computed(() => ({
@@ -243,6 +286,82 @@ const distributionChartOption = computed(() => ({
         itemStyle: { color: nodeColor(index) },
       })),
   }],
+}))
+
+const pathDistributionChartOption = computed(() => ({
+  animationDuration: appStore.disablePageAnimation ? 0 : 350,
+  tooltip: {
+    trigger: 'item',
+    confine: true,
+    formatter: (params: unknown) => {
+      const data = (params as { data?: { value?: [number, number], path?: EstimatedUnlockPath } }).data
+      if (!data?.value || !data.path)
+        return ''
+      const path = data.path
+      const remark = path.exit_remark ? `<br/><span style="opacity:.72">${escapeHtml(path.exit_remark)}</span>` : ''
+      return `<strong>${escapeHtml(path.exit_name)}</strong>${remark}<br/>经 IPv${path.family} · ${escapeHtml(path.ping_task_name)}<br/>估算 P50 / P95 ${path.estimated_p50_ms.toFixed(0)} / ${path.estimated_p95_ms.toFixed(0)} ms<br/>估算失败 ${formatUnlockQualityPercent(path.estimated_failure_percent)}<br/>组合评分 ${formatUnlockQualityScore(path.score)}`
+    },
+  },
+  grid: { left: 58, right: 22, top: 28, bottom: 50 },
+  xAxis: {
+    type: 'value',
+    name: '估算 P50 (ms)',
+    nameLocation: 'middle',
+    nameGap: 32,
+    min: 0,
+    axisLabel: { color: chartTextColor.value },
+    splitLine: { lineStyle: { color: chartSplitColor.value } },
+  },
+  yAxis: {
+    type: 'value',
+    name: '估算失败 (%)',
+    min: 0,
+    axisLabel: { color: chartTextColor.value, formatter: '{value}%' },
+    splitLine: { lineStyle: { color: chartSplitColor.value } },
+  },
+  series: [{
+    type: 'scatter',
+    symbolSize: 18,
+    data: estimatedPaths.value.map((path, index) => ({
+      value: [path.estimated_p50_ms, path.estimated_failure_percent],
+      path,
+      itemStyle: { color: nodeColor(index) },
+    })),
+  }],
+}))
+
+const pathLatencyChartOption = computed(() => ({
+  animationDuration: appStore.disablePageAnimation ? 0 : 350,
+  tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' }, confine: true },
+  legend: { top: 0, textStyle: { color: chartTextColor.value } },
+  grid: { left: 130, right: 24, top: 42, bottom: 34 },
+  xAxis: {
+    type: 'value',
+    name: '估算耗时 (ms)',
+    axisLabel: { color: chartTextColor.value },
+    splitLine: { lineStyle: { color: chartSplitColor.value } },
+  },
+  yAxis: {
+    type: 'category',
+    data: estimatedPaths.value.map(path => path.exit_name),
+    axisLabel: { color: chartTextColor.value, width: 110, overflow: 'truncate' },
+  },
+  series: [
+    {
+      name: '入口到落地 P50',
+      type: 'bar',
+      stack: 'latency',
+      data: estimatedPaths.value.map(path => path.link.p50 ?? 0),
+      itemStyle: { color: '#2563EB' },
+    },
+    {
+      name: '落地到 ChatGPT TTFB',
+      type: 'bar',
+      stack: 'latency',
+      data: estimatedPaths.value.map(path => path.unlock.system.ttfb_p50_ms),
+      itemStyle: { color: '#059669' },
+    },
+  ],
 }))
 
 const trendChartOption = computed(() => {
@@ -304,7 +423,7 @@ onMounted(() => loadData())
             ChatGPT 解锁线路
           </h1>
           <p class="text-sm text-muted-foreground">
-            对比系统线路与代理中转访问 ChatGPT 的完整链路体验
+            查看节点直连质量，并估算不同入口与落地节点组合后的链式代理体验
           </p>
         </div>
       </div>
@@ -335,15 +454,15 @@ onMounted(() => loadData())
           </TabsList>
         </Tabs>
       </div>
-      <div v-if="hasRelay">
-        <span class="mb-1.5 block text-xs text-muted-foreground">分析线路</span>
-        <Tabs v-model="routePerspective">
+      <div>
+        <span class="mb-1.5 block text-xs text-muted-foreground">分析方式</span>
+        <Tabs v-model="analysisMode">
           <TabsList>
-            <TabsTrigger value="system">
-              系统线路
+            <TabsTrigger value="direct">
+              节点直连
             </TabsTrigger>
-            <TabsTrigger value="relay">
-              中转线路
+            <TabsTrigger value="path">
+              链式代理估算
             </TabsTrigger>
           </TabsList>
         </Tabs>
@@ -358,13 +477,178 @@ onMounted(() => loadData())
     </div>
     <Empty v-else-if="!selectedTask || !snapshot" title="尚无解锁质量数据" description="请先在后台启用任务，并等待服务端生成第一份快照。" />
 
+    <template v-else-if="analysisMode === 'path'">
+      <div v-if="pathLoading" class="flex min-h-[360px] items-center justify-center">
+        <Spinner class="size-6" />
+      </div>
+      <div v-else-if="pathError" class="rounded-md border border-destructive/30 bg-destructive/5 p-5 text-sm text-destructive">
+        {{ pathError }}
+      </div>
+      <Empty
+        v-else-if="entryOptions.length === 0 || estimatedPaths.length === 0"
+        title="尚无可组合线路"
+        description="需要至少一个指向落地节点的现有 ICMP 延迟任务，以及该落地节点的 ChatGPT 检测数据。"
+      />
+      <template v-else>
+        <section class="mb-4 grid gap-4 border-y bg-muted/25 px-4 py-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+          <label class="min-w-0">
+            <span class="mb-1.5 block text-xs text-muted-foreground">入口节点</span>
+            <select
+              v-model="selectedEntryUUID"
+              class="h-10 w-full rounded-md border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring"
+            >
+              <option v-for="entry in entryOptions" :key="entry.uuid" :value="entry.uuid">
+                {{ entry.name }}
+              </option>
+            </select>
+          </label>
+          <p class="text-xs leading-5 text-muted-foreground md:max-w-[520px]">
+            入口节点是用户流量首先连接的服务器；落地节点是最终连接 ChatGPT 的出口服务器。这里只复用既有快照进行估算，不会让 Agent 增加探测。
+          </p>
+        </section>
+
+        <div class="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+          <span class="inline-flex items-center gap-1">
+            <Icon icon="lucide:database" width="14" height="14" />
+            后台快照 {{ generatedText }}
+          </span>
+          <span>估算链路：入口节点 → 落地节点（出口节点）→ ChatGPT</span>
+          <span>访问本页不会发起探测</span>
+        </div>
+
+        <section class="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <div class="rounded-md border bg-card p-4">
+            <p class="text-xs text-muted-foreground">
+              可比较落地节点
+            </p>
+            <p class="mt-1 text-2xl font-semibold">
+              {{ estimatedPaths.length }}
+            </p>
+          </div>
+          <div class="rounded-md border bg-card p-4">
+            <p class="text-xs text-muted-foreground">
+              当前最佳落地
+            </p>
+            <p class="mt-1 truncate text-base font-semibold">
+              {{ bestEstimatedPath?.exit_name ?? '--' }}
+            </p>
+          </div>
+          <div class="rounded-md border bg-card p-4">
+            <p class="text-xs text-muted-foreground">
+              最佳组合评分
+            </p>
+            <p class="mt-1 text-2xl font-semibold text-emerald-600 dark:text-emerald-400">
+              {{ formatUnlockQualityScore(bestEstimatedPath?.score ?? null) }}
+            </p>
+          </div>
+          <div class="rounded-md border bg-card p-4">
+            <p class="text-xs text-muted-foreground">
+              最佳估算 P50
+            </p>
+            <p class="mt-1 text-2xl font-semibold">
+              {{ bestEstimatedPath ? `${bestEstimatedPath.estimated_p50_ms.toFixed(0)} ms` : '--' }}
+            </p>
+          </div>
+        </section>
+
+        <section class="mb-5 border-y bg-muted/25 px-4 py-3">
+          <div class="mb-2 flex items-center gap-2">
+            <Icon icon="lucide:calculator" width="16" height="16" class="text-emerald-600 dark:text-emerald-400" />
+            <h2 class="text-sm font-semibold">
+              估算方法
+            </h2>
+          </div>
+          <div class="grid gap-x-6 gap-y-2 text-xs leading-5 text-muted-foreground sm:grid-cols-2 lg:grid-cols-3">
+            <p><strong class="text-foreground">估算延迟：</strong>入口到落地的 P50/P95，加上落地访问 ChatGPT 的 TTFB。</p>
+            <p><strong class="text-foreground">估算失败：</strong>按两段链路任意一段失败的联合概率计算，不直接相加百分比。</p>
+            <p><strong class="text-foreground">组合评分：</strong>入口到落地占 35%，落地到 ChatGPT 占 65%，并限制不能掩盖明显短板。</p>
+            <p><strong class="text-foreground">协议选择：</strong>同一落地节点同时有 IPv4/IPv6 时，自动采用当前质量更好的有效线路。</p>
+            <p><strong class="text-foreground">适用范围：</strong>用于快速比较落地节点，不等同于真实代理软件的完整会话测试。</p>
+            <p><strong class="text-foreground">资源影响：</strong>只读取服务器定期生成的固定快照，Agent CPU、内存和请求数均不增加。</p>
+          </div>
+        </section>
+
+        <div class="grid gap-5 md:grid-cols-2">
+          <section class="rounded-md border bg-card p-4">
+            <div class="mb-3">
+              <h2 class="font-semibold">
+                落地节点排名
+              </h2>
+              <p class="text-xs text-muted-foreground">
+                比较同一个入口节点搭配不同落地节点后的估算体验。
+              </p>
+            </div>
+            <div class="space-y-2">
+              <div
+                v-for="(path, index) in estimatedPaths"
+                :key="path.exit_uuid"
+                class="grid min-h-[92px] grid-cols-[28px_minmax(0,1fr)_auto] items-center gap-3 rounded-md border px-3 py-2"
+              >
+                <span class="text-center font-semibold text-emerald-600 dark:text-emerald-400">{{ index + 1 }}</span>
+                <div class="min-w-0">
+                  <p class="truncate text-sm font-medium">
+                    {{ path.exit_name }}
+                  </p>
+                  <p v-if="path.exit_remark" class="truncate text-xs text-muted-foreground">
+                    {{ path.exit_remark }}
+                  </p>
+                  <p class="mt-1 text-xs text-muted-foreground">
+                    估算 P50 {{ path.estimated_p50_ms.toFixed(0) }}ms · P95 {{ path.estimated_p95_ms.toFixed(0) }}ms · 失败 {{ formatUnlockQualityPercent(path.estimated_failure_percent) }}
+                  </p>
+                  <p class="mt-0.5 truncate text-[11px] text-muted-foreground">
+                    经 IPv{{ path.family }} · {{ path.ping_task_name }} · {{ exitLabel(path.unlock.system) }}
+                  </p>
+                </div>
+                <div class="text-right">
+                  <p class="text-lg font-semibold tabular-nums">
+                    {{ formatUnlockQualityScore(path.score) }}
+                  </p>
+                  <Badge :class="gradeClass(path.grade)" class="border-0">
+                    {{ path.grade }}
+                  </Badge>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="rounded-md border bg-card p-4">
+            <div class="mb-3">
+              <h2 class="font-semibold">
+                估算延迟 / 失败分布
+              </h2>
+              <p class="text-xs text-muted-foreground">
+                越靠左下角越好；悬停可查看采用的协议和任务。
+              </p>
+            </div>
+            <div class="quality-chart">
+              <VChart class="size-full" autoresize :option="pathDistributionChartOption" />
+            </div>
+          </section>
+
+          <section class="rounded-md border bg-card p-4 md:col-span-2">
+            <div class="mb-3">
+              <h2 class="font-semibold">
+                P50 延迟构成
+              </h2>
+              <p class="text-xs text-muted-foreground">
+                蓝色是入口到落地，绿色是落地到 ChatGPT；堆叠长度为估算总耗时。
+              </p>
+            </div>
+            <div class="quality-chart">
+              <VChart class="size-full" autoresize :option="pathLatencyChartOption" />
+            </div>
+          </section>
+        </div>
+      </template>
+    </template>
+
     <template v-else>
       <div class="mb-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
         <span class="inline-flex items-center gap-1">
           <Icon icon="lucide:database" width="14" height="14" />
           后台快照 {{ generatedText }}
         </span>
-        <span>{{ routePerspective === 'relay' ? '经管理员配置的 HTTP/SOCKS5 中转发起真实 HTTPS 请求' : '使用节点系统网络与系统 DNS 发起真实 HTTPS 请求' }}</span>
+        <span>使用节点系统网络与系统 DNS 发起真实 HTTPS 请求</span>
         <span>访问本页不会发起探测</span>
       </div>
 
@@ -395,37 +679,10 @@ onMounted(() => loadData())
         </div>
         <div class="rounded-md border bg-card p-4">
           <p class="text-xs text-muted-foreground">
-            {{ routePerspective === 'relay' ? '中转地区可用' : '系统线路可用' }}
+            系统线路可用
           </p>
           <p class="mt-1 text-2xl font-semibold">
             {{ availableNodes }}
-          </p>
-        </div>
-      </section>
-
-      <section v-if="hasRelay" class="mb-5 grid gap-3 border-y bg-muted/25 px-4 py-3 sm:grid-cols-3">
-        <div>
-          <p class="text-xs text-muted-foreground">
-            已配置中转节点
-          </p>
-          <p class="mt-1 text-lg font-semibold">
-            {{ relayedNodes.length }}
-          </p>
-        </div>
-        <div>
-          <p class="text-xs text-muted-foreground">
-            中转后评分提高
-          </p>
-          <p class="mt-1 text-lg font-semibold">
-            {{ improvedRelayNodes }} 个节点
-          </p>
-        </div>
-        <div>
-          <p class="text-xs text-muted-foreground">
-            平均中转收益
-          </p>
-          <p class="mt-1 text-lg font-semibold" :class="(averageRelayGain ?? 0) > 0 ? 'text-emerald-600 dark:text-emerald-400' : ''">
-            {{ averageRelayGain === null ? '--' : signedMetric(averageRelayGain, ' 分') }}
           </p>
         </div>
       </section>
@@ -444,7 +701,7 @@ onMounted(() => loadData())
           <p><strong class="text-foreground">HTTPS 失败：</strong>超时、断线或 TLS 失败；正常返回的 401、403、404 不算网络失败。</p>
           <p><strong class="text-foreground">DNS / 建连 / TLS：</strong>分别是查地址、建立 TCP 连接和完成加密握手的耗时。</p>
           <p><strong class="text-foreground">覆盖率：</strong>实际采样占应采样的比例；低于 80% 时暂不评分，避免数据太少误导。</p>
-          <p><strong class="text-foreground">中转收益：</strong>中转分减去系统线路分；正数代表使用中转后整体体验更好。</p>
+          <p><strong class="text-foreground">链式代理：</strong>切换到“链式代理估算”，可选择入口节点并比较不同落地节点。</p>
         </div>
       </section>
 
@@ -494,14 +751,8 @@ onMounted(() => loadData())
                 <p v-if="entry.route" class="mt-1 text-xs text-muted-foreground">
                   {{ unlockQualityStatusLabel(entry.route.status) }} · TTFB {{ entry.route.ttfb_p50_ms.toFixed(0) }} / {{ entry.route.ttfb_p95_ms.toFixed(0) }}ms · 失败 {{ formatUnlockQualityPercent(entry.route.failure_percent) }}
                 </p>
-                <p v-else class="mt-1 text-xs text-muted-foreground">
-                  未配置中转监测
-                </p>
                 <p class="mt-0.5 truncate text-[11px] text-muted-foreground">
                   {{ exitLabel(entry.route) }}
-                </p>
-                <p v-if="entry.node.relay && entry.node.relay_score_gain !== undefined" class="mt-0.5 truncate text-[11px]" :class="entry.node.relay_score_gain > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground'">
-                  中转收益 {{ signedMetric(entry.node.relay_score_gain, ' 分') }} · TTFB 改善 {{ signedMetric(entry.node.relay_ttfb_gain_ms, ' ms') }}
                 </p>
               </div>
               <div class="text-right">
@@ -509,7 +760,7 @@ onMounted(() => loadData())
                   {{ formatUnlockQualityScore(entry.route?.score ?? null) }}
                 </p>
                 <Badge :class="gradeClass(entry.route?.grade ?? '未评级')" class="border-0">
-                  {{ entry.route?.grade ?? '未配置' }}
+                  {{ entry.route?.grade ?? '未评级' }}
                 </Badge>
               </div>
             </div>
@@ -566,7 +817,7 @@ onMounted(() => loadData())
             <article
               v-for="node in sortedNodes"
               :key="node.uuid"
-              class="grid gap-3 rounded-md border px-3 py-3 sm:grid-cols-[minmax(160px,1.2fr)_minmax(180px,1.5fr)_minmax(180px,1.5fr)_minmax(120px,1fr)]"
+              class="grid gap-3 rounded-md border px-3 py-3 sm:grid-cols-[minmax(160px,1.1fr)_minmax(220px,1.6fr)_minmax(180px,1fr)]"
             >
               <div class="min-w-0">
                 <p class="truncate text-sm font-medium">
@@ -593,37 +844,15 @@ onMounted(() => loadData())
                   失败 {{ formatUnlockQualityPercent(node.system.failure_percent) }} · 总耗时 {{ node.system.total_p50_ms.toFixed(0) }} ms · 得分 {{ formatUnlockQualityScore(node.system.score) }}
                 </p>
               </div>
-              <div class="rounded bg-muted/35 px-3 py-2">
-                <template v-if="node.relay">
-                  <div class="flex items-center justify-between gap-2">
-                    <p class="text-xs font-medium">
-                      中转线路
-                    </p>
-                    <span class="rounded px-1.5 py-0.5 text-[11px]" :class="statusClass(node.relay.status)">{{ unlockQualityStatusLabel(node.relay.status) }}</span>
-                  </div>
-                  <p class="mt-1 text-xs tabular-nums">
-                    TTFB {{ node.relay.ttfb_p50_ms.toFixed(0) }} / {{ node.relay.ttfb_p95_ms.toFixed(0) }} ms
-                  </p>
-                  <p class="mt-1 text-[11px] text-muted-foreground tabular-nums">
-                    失败 {{ formatUnlockQualityPercent(node.relay.failure_percent) }} · 总耗时 {{ node.relay.total_p50_ms.toFixed(0) }} ms · 得分 {{ formatUnlockQualityScore(node.relay.score) }}
-                  </p>
-                </template>
-                <p v-else class="text-xs text-muted-foreground">
-                  未配置中转监测
-                </p>
-              </div>
               <div>
                 <p class="text-[11px] text-muted-foreground">
-                  中转收益
+                  请求阶段
                 </p>
-                <p class="mt-1 text-sm font-medium tabular-nums" :class="(node.relay_score_gain ?? 0) > 0 ? 'text-emerald-600 dark:text-emerald-400' : ''">
-                  {{ signedMetric(node.relay_score_gain, ' 分') }}
+                <p class="mt-1 text-xs tabular-nums">
+                  DNS {{ node.system.dns_ms.toFixed(0) }} · 连接 {{ node.system.connect_ms.toFixed(0) }} · TLS {{ node.system.tls_ms.toFixed(0) }} ms
                 </p>
                 <p class="mt-1 text-[11px] text-muted-foreground tabular-nums">
-                  TTFB {{ signedMetric(node.relay_ttfb_gain_ms, ' ms') }} · 失败率 {{ signedMetric(node.relay_failure_gain_percent, '%') }}
-                </p>
-                <p v-if="node.relay" class="mt-1 truncate text-[11px] text-muted-foreground">
-                  {{ exitLabel(node.relay) }}
+                  覆盖率 {{ formatUnlockQualityPercent(node.system.coverage_percent) }} · 样本 {{ node.system.samples_received }} / {{ node.system.samples_sent }}
                 </p>
               </div>
             </article>

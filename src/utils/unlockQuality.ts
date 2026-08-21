@@ -27,7 +27,7 @@ export interface UnlockQualityTrendPoint {
 }
 
 export interface UnlockQualityRouteSummary {
-  route_mode: 'system' | 'control' | 'fixed' | 'relay'
+  route_mode: 'system' | 'control' | 'fixed'
   status: UnlockQualityStatus
   score: number | null
   grade: string
@@ -59,12 +59,14 @@ export interface UnlockQualitySnapshotNode {
   grade: string
   system: UnlockQualityRouteSummary
   control?: UnlockQualityRouteSummary
-  relay?: UnlockQualityRouteSummary
   fixed_diagnostic?: UnlockQualityRouteSummary
   improvement_score?: number
-  relay_score_gain?: number
-  relay_ttfb_gain_ms?: number
-  relay_failure_gain_percent?: number
+}
+
+export interface UnlockQualityPathBinding {
+  ping_task_id: number
+  exit_node_uuid: string
+  family: 4 | 6
 }
 
 export interface UnlockQualitySnapshot {
@@ -73,6 +75,7 @@ export interface UnlockQualitySnapshot {
   service: string
   window_hours: number
   generated_at: string
+  path_bindings: UnlockQualityPathBinding[]
   nodes: UnlockQualitySnapshotNode[]
 }
 

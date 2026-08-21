@@ -536,29 +536,31 @@ onMounted(() => loadData())
           </div>
         </section>
 
-        <section class="rounded-md border bg-card p-4 md:block" :class="[activeSection === 'ranking' ? 'block' : 'hidden']">
-          <h2 class="font-semibold">
-            评分构成
-          </h2>
-          <p class="mb-2 text-xs text-muted-foreground">
-            综合网络分、TCP 质量分与 ICMP 基础分并列展示。
-          </p>
-          <div class="quality-chart quality-chart--score">
-            <VChart class="size-full" :option="scoreChartOption" autoresize />
-          </div>
-        </section>
+        <div class="space-y-5 md:block" :class="[activeSection === 'ranking' || activeSection === 'distribution' ? 'block' : 'hidden']">
+          <section class="rounded-md border bg-card p-4 md:block" :class="[activeSection === 'ranking' ? 'block' : 'hidden']">
+            <h2 class="font-semibold">
+              评分构成
+            </h2>
+            <p class="mb-2 text-xs text-muted-foreground">
+              综合网络分、TCP 质量分与 ICMP 基础分并列展示。
+            </p>
+            <div class="quality-chart quality-chart--score">
+              <VChart class="size-full" :option="scoreChartOption" autoresize />
+            </div>
+          </section>
 
-        <section class="rounded-md border bg-card p-4 md:col-span-2 md:block" :class="[activeSection === 'distribution' ? 'block' : 'hidden']">
-          <h2 class="font-semibold">
-            典型最小至最大延迟
-          </h2>
-          <p class="mb-2 text-xs text-muted-foreground">
-            灰线为多轮检测的典型最小至最大范围，绿色段为 P50–P95；兼顾大范围波动并抑制单次极端误差。
-          </p>
-          <div class="quality-chart">
-            <VChart class="size-full" :option="rangeChartOption" autoresize />
-          </div>
-        </section>
+          <section class="rounded-md border bg-card p-4 md:block" :class="[activeSection === 'distribution' ? 'block' : 'hidden']">
+            <h2 class="font-semibold">
+              典型最小至最大延迟
+            </h2>
+            <p class="mb-2 text-xs text-muted-foreground">
+              灰线为多轮检测的典型最小至最大范围，绿色段为 P50–P95；兼顾大范围波动并抑制单次极端误差。
+            </p>
+            <div class="quality-chart">
+              <VChart class="size-full" :option="rangeChartOption" autoresize />
+            </div>
+          </section>
+        </div>
 
         <section class="rounded-md border bg-card p-4 md:col-span-2 md:block" :class="[activeSection === 'distribution' ? 'block' : 'hidden']">
           <h2 class="font-semibold">
