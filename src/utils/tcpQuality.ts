@@ -21,6 +21,9 @@ export interface TCPQualityTargetLabel {
 
 export interface TCPQualityModeStats {
   loss_percent: number
+  min_ms: number
+  max_ms: number
+  average_ms: number
   p50_ms: number
   p95_ms: number
   samples_sent: number
@@ -41,8 +44,13 @@ export interface TCPQualityNodeTarget {
 export interface TCPQualityTrendPoint {
   time: string
   loss_percent: number
+  min_ms: number
+  max_ms: number
+  average_ms: number
   p50_ms: number
   p95_ms: number
+  samples_sent: number
+  samples_received: number
 }
 
 export interface TCPQualitySnapshotNode {

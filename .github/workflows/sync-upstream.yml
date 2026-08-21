@@ -75,6 +75,18 @@ jobs:
               echo "$conflict_files"
               echo '```'
               echo
+              echo "## Fork-owned files to preserve"
+              echo
+              echo '```text'
+              echo 'src/views/UnlockQuality.vue'
+              echo 'src/views/TCPQuality.vue'
+              echo 'src/utils/unlockQuality.ts'
+              echo 'src/utils/tcpQuality.ts'
+              echo 'src/views/ThemeSettingsApp.vue'
+              echo 'README.md'
+              echo '.github/workflows/sync-upstream.yml'
+              echo '```'
+              echo
               echo "Do not merge this report-only commit. Resolve the upstream merge on this branch, delete this file, run the repository tests, and then update the pull request."
             } > .github/UPSTREAM_SYNC_CONFLICTS.md
             git add .github/UPSTREAM_SYNC_CONFLICTS.md
@@ -98,6 +110,14 @@ jobs:
             exit 0
           fi
 
+          protected_changes="$(git diff --name-only "origin/${BASE_BRANCH}..HEAD" -- \
+            src/views/UnlockQuality.vue \
+            src/views/TCPQuality.vue \
+            src/utils/unlockQuality.ts \
+            src/utils/tcpQuality.ts \
+            src/views/ThemeSettingsApp.vue \
+            README.md \
+            .github/workflows/sync-upstream.yml)"
           bun install --frozen-lockfile
           bun run build
           git push --force-with-lease origin "${SYNC_BRANCH}"
@@ -105,15 +125,55 @@ jobs:
             echo "needed=true"
             echo "ready=true"
             echo "conflict=false"
+            echo "protected_changes<<EOF"
+            echo "$protected_changes"
+            echo "EOF"
           } >> "$GITHUB_OUTPUT"
+
+          if [ -n "$protected_changes" ]; then
+            {
+              echo "## Fork-owned theme files changed"
+              echo
+              echo '```text'
+              echo "$protected_changes"
+              echo '```'
+              echo
+              echo "Review these files manually before merging."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Create or update the review pull request
         if: steps.sync.outputs.ready == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          PROTECTED_CHANGES: ${{ steps.sync.outputs.protected_changes }}
         run: |
           set -euo pipefail
-          body="Automated upstream merge. Keep the rolling v1.0.0 release policy and review Cazi settings, privacy and analysis pages before merging."
+          body="$(cat <<'EOF'
+          Automated upstream merge. Keep the rolling v1.0.0 release policy and review Cazi settings, privacy and analysis pages before merging.
+
+          Fork-owned files to preserve:
+
+          ```text
+          src/views/UnlockQuality.vue
+          src/views/TCPQuality.vue
+          src/utils/unlockQuality.ts
+          src/utils/tcpQuality.ts
+          src/views/ThemeSettingsApp.vue
+          README.md
+          .github/workflows/sync-upstream.yml
+          ```
+          EOF
+          )"
+          if [ -n "${PROTECTED_CHANGES}" ]; then
+            body="${body}
+
+          Fork-owned files changed by this sync:
+
+          \`\`\`text
+          ${PROTECTED_CHANGES}
+          \`\`\`"
+          fi
           if gh pr view "${SYNC_BRANCH}" --repo "${GITHUB_REPOSITORY}" --json number >/dev/null 2>&1; then
             gh pr edit "${SYNC_BRANCH}" --repo "${GITHUB_REPOSITORY}" --title "${PR_TITLE}" --body "$body"
           else

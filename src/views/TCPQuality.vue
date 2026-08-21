@@ -26,7 +26,14 @@ import '@/utils/echarts'
 const viewProps = withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false })
 
 type ViewSection = 'ranking' | 'distribution' | 'trend' | 'targets'
-type TrendMetric = 'p50' | 'p95' | 'loss'
+type TrendMetric = 'min' | 'average' | 'p50' | 'p95' | 'max' | 'loss'
+interface RangeRenderParams {
+  dataIndex: number
+}
+interface RangeRenderApi {
+  value: (dimension: number) => unknown
+  coord: (data: [number, number]) => [number, number]
+}
 
 const router = useRouter()
 const appStore = useAppStore()
@@ -65,6 +72,11 @@ const isDark = computed(() => appStore.isDark)
 const chartTextColor = computed(() => isDark.value ? 'rgba(255,255,255,.68)' : 'rgba(15,23,42,.66)')
 const chartSplitColor = computed(() => isDark.value ? 'rgba(255,255,255,.08)' : 'rgba(15,23,42,.08)')
 const generatedText = computed(() => snapshot.value?.generated_at ? dayjs(snapshot.value.generated_at).format('MM-DD HH:mm:ss') : '--')
+const rangedNodes = computed(() => sortedNodes.value.filter(node => node.standard.samples_received > 0))
+const rangeAxisMax = computed(() => {
+  const maximum = Math.max(1, ...rangedNodes.value.map(node => node.standard.max_ms))
+  return Math.ceil(maximum * 1.12 / 10) * 10
+})
 
 function escapeHtml(value: string): string {
   return value
@@ -230,6 +242,68 @@ const distributionChartOption = computed(() => ({
   }],
 }))
 
+const rangeChartOption = computed(() => ({
+  animationDuration: appStore.disablePageAnimation ? 0 : 350,
+  tooltip: {
+    trigger: 'item',
+    confine: true,
+    formatter: (params: unknown) => {
+      const index = Number((params as { dataIndex?: number }).dataIndex ?? -1)
+      const node = rangedNodes.value[index]
+      if (!node)
+        return ''
+      const remark = node.public_remark ? `<br/><span style="opacity:.72">${escapeHtml(node.public_remark)}</span>` : ''
+      return `<strong>${escapeHtml(node.name)}</strong>${remark}<br/>典型最小 ${node.standard.min_ms.toFixed(1)} ms<br/>平均 ${node.standard.average_ms.toFixed(1)} ms<br/>P50 / P95 ${node.standard.p50_ms.toFixed(1)} / ${node.standard.p95_ms.toFixed(1)} ms<br/>典型最大 ${node.standard.max_ms.toFixed(1)} ms`
+    },
+  },
+  grid: { top: 12, right: 62, bottom: 34, left: 118 },
+  xAxis: {
+    type: 'value',
+    min: 0,
+    max: rangeAxisMax.value,
+    name: '延迟 (ms)',
+    axisLabel: { color: chartTextColor.value },
+    splitLine: { lineStyle: { color: chartSplitColor.value } },
+  },
+  yAxis: {
+    type: 'category',
+    inverse: true,
+    data: rangedNodes.value.map(node => node.name),
+    axisLabel: { color: chartTextColor.value, width: 96, overflow: 'truncate' },
+    axisLine: { show: false },
+    axisTick: { show: false },
+  },
+  series: [{
+    name: '典型最小至最大延迟',
+    type: 'custom',
+    renderItem: (_params: RangeRenderParams, api: RangeRenderApi) => {
+      const category = Number(api.value(0))
+      const minimum = Number(api.value(1))
+      const p50 = Number(api.value(2))
+      const p95 = Number(api.value(3))
+      const maximum = Number(api.value(4))
+      const minPoint = api.coord([minimum, category])
+      const p50Point = api.coord([p50, category])
+      const p95Point = api.coord([p95, category])
+      const maxPoint = api.coord([maximum, category])
+      return {
+        type: 'group',
+        children: [
+          { type: 'line', shape: { x1: minPoint[0], y1: minPoint[1], x2: maxPoint[0], y2: maxPoint[1] }, style: { stroke: chartTextColor.value, opacity: 0.42, lineWidth: 3, lineCap: 'round' } },
+          { type: 'line', shape: { x1: p50Point[0], y1: p50Point[1], x2: p95Point[0], y2: p95Point[1] }, style: { stroke: '#34D399', lineWidth: 5, lineCap: 'round' } },
+          { type: 'circle', shape: { cx: minPoint[0], cy: minPoint[1], r: 3 }, style: { fill: chartTextColor.value } },
+          { type: 'circle', shape: { cx: maxPoint[0], cy: maxPoint[1], r: 3 }, style: { fill: chartTextColor.value } },
+          { type: 'circle', shape: { cx: p50Point[0], cy: p50Point[1], r: 5 }, style: { fill: '#5EEAA6', stroke: '#047857', lineWidth: 1 } },
+          { type: 'circle', shape: { cx: p95Point[0], cy: p95Point[1], r: 5 }, style: { fill: isDark.value ? '#111827' : '#FFFFFF', stroke: '#34D399', lineWidth: 2 } },
+          { type: 'text', style: { x: maxPoint[0] + 9, y: maxPoint[1], text: `${Math.round(minimum)}–${Math.round(maximum)}`, fill: chartTextColor.value, fontSize: 10, fontWeight: 600, verticalAlign: 'middle' } },
+        ],
+      }
+    },
+    encode: { x: [1, 2, 3, 4], y: 0 },
+    data: rangedNodes.value.map((node, index) => [index, node.standard.min_ms, node.standard.p50_ms, node.standard.p95_ms, node.standard.max_ms]),
+  }],
+}))
+
 const trendChartOption = computed(() => {
   const metric = trendMetric.value
   const isLoss = metric === 'loss'
@@ -259,7 +333,17 @@ const trendChartOption = computed(() => {
       itemStyle: { color: nodeColor(index) },
       data: node.trend.map(point => [
         point.time,
-        metric === 'loss' ? point.loss_percent : metric === 'p95' ? point.p95_ms : point.p50_ms,
+        metric === 'loss'
+          ? point.loss_percent
+          : metric === 'min'
+            ? point.min_ms
+            : metric === 'average'
+              ? point.average_ms
+              : metric === 'p95'
+                ? point.p95_ms
+                : metric === 'max'
+                  ? point.max_ms
+                  : point.p50_ms,
       ]),
     })),
   }
@@ -374,6 +458,23 @@ onMounted(() => loadData())
         </div>
       </section>
 
+      <section class="mb-5 border-y bg-muted/25 px-4 py-3">
+        <div class="mb-2 flex items-center gap-2">
+          <Icon icon="lucide:info" width="16" height="16" class="text-emerald-600 dark:text-emerald-400" />
+          <h2 class="text-sm font-semibold">
+            指标怎么理解
+          </h2>
+        </div>
+        <div class="grid gap-x-6 gap-y-2 text-xs leading-5 text-muted-foreground sm:grid-cols-2 lg:grid-cols-3">
+          <p><strong class="text-foreground">综合网络分：</strong>同时考虑 ICMP 延迟与丢包、TCP 首次响应及可选大小包结果。</p>
+          <p><strong class="text-foreground">首次响应丢失：</strong>发出的 TCP SYN 没有按时收到首次响应，越低越稳定；它不是系统统计的真实重传次数。</p>
+          <p><strong class="text-foreground">典型最小–最大：</strong>综合多轮检测的稳健边界，保留大范围波动，同时降低单次极端误差的干扰。</p>
+          <p><strong class="text-foreground">P50 / P95：</strong>P50 代表日常水平，P95 更接近偶发卡顿时的体验。</p>
+          <p><strong class="text-foreground">覆盖率：</strong>有效样本达到计划样本的比例；数据不足时不会强行参与排名。</p>
+          <p><strong class="text-foreground">同时故障剔除：</strong>多个节点同一时段都失败时，优先判断为公共测试目标异常，避免错误处罚节点。</p>
+        </div>
+      </section>
+
       <Tabs v-model="activeSection" class="mb-4 md:hidden">
         <TabsList class="grid w-full grid-cols-4">
           <TabsTrigger value="ranking">
@@ -449,6 +550,18 @@ onMounted(() => loadData())
 
         <section class="rounded-md border bg-card p-4 md:col-span-2 md:block" :class="[activeSection === 'distribution' ? 'block' : 'hidden']">
           <h2 class="font-semibold">
+            典型最小至最大延迟
+          </h2>
+          <p class="mb-2 text-xs text-muted-foreground">
+            灰线为多轮检测的典型最小至最大范围，绿色段为 P50–P95；兼顾大范围波动并抑制单次极端误差。
+          </p>
+          <div class="quality-chart">
+            <VChart class="size-full" :option="rangeChartOption" autoresize />
+          </div>
+        </section>
+
+        <section class="rounded-md border bg-card p-4 md:col-span-2 md:block" :class="[activeSection === 'distribution' ? 'block' : 'hidden']">
+          <h2 class="font-semibold">
             延迟 / 首包丢失分布
           </h2>
           <p class="mb-2 text-xs text-muted-foreground">
@@ -470,12 +583,21 @@ onMounted(() => loadData())
               </p>
             </div>
             <Tabs v-model="trendMetric">
-              <TabsList>
+              <TabsList class="max-w-full overflow-x-auto">
+                <TabsTrigger value="min">
+                  最小
+                </TabsTrigger>
+                <TabsTrigger value="average">
+                  平均
+                </TabsTrigger>
                 <TabsTrigger value="p50">
                   P50
                 </TabsTrigger>
                 <TabsTrigger value="p95">
                   P95
+                </TabsTrigger>
+                <TabsTrigger value="max">
+                  最大
                 </TabsTrigger>
                 <TabsTrigger value="loss">
                   首包丢失
@@ -498,7 +620,7 @@ onMounted(() => loadData())
             </p>
           </div>
           <div class="overflow-x-auto">
-            <table class="w-full min-w-[760px] text-sm">
+            <table class="w-full min-w-[900px] text-sm">
               <thead class="border-y bg-muted/50 text-left text-xs text-muted-foreground">
                 <tr>
                   <th class="px-4 py-2.5">
@@ -512,6 +634,9 @@ onMounted(() => loadData())
                   </th>
                   <th class="px-4 py-2.5">
                     P95
+                  </th>
+                  <th class="px-4 py-2.5">
+                    典型范围
                   </th>
                   <th class="px-4 py-2.5">
                     首次响应丢失
@@ -541,6 +666,9 @@ onMounted(() => loadData())
                     </td>
                     <td class="px-4 py-2.5">
                       {{ target.standard ? `${target.standard.p95_ms.toFixed(1)} ms` : '--' }}
+                    </td>
+                    <td class="px-4 py-2.5 whitespace-nowrap">
+                      {{ target.standard ? `${target.standard.min_ms.toFixed(1)}–${target.standard.max_ms.toFixed(1)} ms` : '--' }}
                     </td>
                     <td class="px-4 py-2.5">
                       {{ target.standard ? formatTCPQualityLoss(target.standard.loss_percent) : '--' }}

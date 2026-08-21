@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type {
   UnlockQualityPublicTask,
+  UnlockQualityRouteSummary,
   UnlockQualitySnapshot,
   UnlockQualitySnapshotNode,
   UnlockQualityStatus,
@@ -27,6 +28,13 @@ import '@/utils/echarts'
 
 type ViewSection = 'ranking' | 'distribution' | 'trend' | 'details'
 type TrendMetric = 'p50' | 'p95' | 'min' | 'max' | 'failure'
+type RoutePerspective = 'system' | 'relay'
+
+interface RouteNodeEntry {
+  node: UnlockQualitySnapshotNode
+  route: UnlockQualityRouteSummary | null
+  rank: number | null
+}
 
 const router = useRouter()
 const appStore = useAppStore()
@@ -36,6 +44,7 @@ const selectedTaskId = ref<number | null>(null)
 const selectedHours = ref(appStore.themeSettings.unlockQualityDefaultHours)
 const activeSection = ref<ViewSection>('ranking')
 const trendMetric = ref<TrendMetric>('p50')
+const routePerspective = ref<RoutePerspective>('system')
 const loading = ref(true)
 const error = ref('')
 
@@ -57,18 +66,42 @@ const trendMetricOptions: Array<{ value: TrendMetric, label: string }> = [
 const chartColors = ['#059669', '#2563EB', '#F97316', '#DB2777', '#7C3AED', '#0891B2', '#65A30D', '#DC2626']
 
 const selectedTask = computed(() => tasks.value.find(task => task.id === selectedTaskId.value) ?? null)
-const sortedNodes = computed(() => [...(snapshot.value?.nodes ?? [])].sort((left, right) => {
-  if (left.rank !== null && right.rank !== null)
-    return left.rank - right.rank
-  if (left.rank !== null)
-    return -1
-  if (right.rank !== null)
-    return 1
-  return left.name.localeCompare(right.name, 'zh-CN')
-}))
-const bestNode = computed(() => sortedNodes.value.find(node => node.rank === 1) ?? null)
-const validNodes = computed(() => sortedNodes.value.filter(node => node.score !== null).length)
-const availableNodes = computed(() => sortedNodes.value.filter(node => node.system.status === 'available').length)
+const hasRelay = computed(() => (snapshot.value?.nodes ?? []).some(node => node.relay !== undefined))
+const routeEntries = computed<RouteNodeEntry[]>(() => {
+  const entries = (snapshot.value?.nodes ?? []).map(node => ({
+    node,
+    route: routePerspective.value === 'relay' ? node.relay ?? null : node.system,
+    rank: null as number | null,
+  }))
+  entries.sort((left, right) => {
+    if (left.route?.score !== null && left.route?.score !== undefined && right.route?.score !== null && right.route?.score !== undefined)
+      return right.route.score - left.route.score
+    if (left.route?.score !== null && left.route?.score !== undefined)
+      return -1
+    if (right.route?.score !== null && right.route?.score !== undefined)
+      return 1
+    return left.node.name.localeCompare(right.node.name, 'zh-CN')
+  })
+  let rank = 0
+  for (const entry of entries) {
+    if (entry.route?.score === null || entry.route?.score === undefined)
+      continue
+    rank += 1
+    entry.rank = rank
+  }
+  return entries
+})
+const sortedNodes = computed(() => routeEntries.value.map(entry => entry.node))
+const bestEntry = computed(() => routeEntries.value.find(entry => entry.rank === 1) ?? null)
+const bestNode = computed(() => bestEntry.value?.node ?? null)
+const validNodes = computed(() => routeEntries.value.filter(entry => entry.route?.score !== null && entry.route?.score !== undefined).length)
+const availableNodes = computed(() => routeEntries.value.filter(entry => entry.route?.status === 'available').length)
+const relayedNodes = computed(() => (snapshot.value?.nodes ?? []).filter(node => node.relay !== undefined))
+const improvedRelayNodes = computed(() => relayedNodes.value.filter(node => (node.relay_score_gain ?? 0) > 0).length)
+const averageRelayGain = computed(() => {
+  const values = relayedNodes.value.map(node => node.relay_score_gain).filter((value): value is number => value !== undefined)
+  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null
+})
 const generatedText = computed(() => snapshot.value?.generated_at ? dayjs(snapshot.value.generated_at).format('MM-DD HH:mm:ss') : '--')
 const chartTextColor = computed(() => appStore.isDark ? 'rgba(255,255,255,.68)' : 'rgba(15,23,42,.66)')
 const chartSplitColor = computed(() => appStore.isDark ? 'rgba(255,255,255,.08)' : 'rgba(15,23,42,.08)')
@@ -108,12 +141,20 @@ function statusClass(status: UnlockQualityStatus): string {
   return 'bg-muted text-muted-foreground'
 }
 
-function exitLabel(node: UnlockQualitySnapshotNode): string {
+function exitLabel(route: UnlockQualityRouteSummary | null): string {
+  if (!route)
+    return '未配置中转监测'
   const values = [
-    node.system.exit_country && `出口 ${node.system.exit_country}`,
-    node.system.edge_colo && `Cloudflare ${node.system.edge_colo}`,
+    route.exit_country && `出口 ${route.exit_country}`,
+    route.edge_colo && `Cloudflare ${route.edge_colo}`,
   ].filter(Boolean)
   return values.join(' · ') || '出口信息待检测'
+}
+
+function signedMetric(value: number | undefined, suffix = ''): string {
+  if (value === undefined)
+    return '--'
+  return `${value > 0 ? '+' : ''}${value.toFixed(1)}${suffix}`
 }
 
 async function loadData(force = false): Promise<void> {
@@ -127,6 +168,8 @@ async function loadData(force = false): Promise<void> {
       snapshot.value = await loadUnlockQualitySnapshot(selectedTaskId.value, selectedHours.value, force)
     else
       snapshot.value = null
+    if (!hasRelay.value)
+      routePerspective.value = 'system'
   }
   catch (cause) {
     error.value = cause instanceof Error ? cause.message : 'ChatGPT 解锁质量快照读取失败'
@@ -145,6 +188,8 @@ watch([selectedTaskId, selectedHours], async ([taskId], [oldTaskId]) => {
   error.value = ''
   try {
     snapshot.value = await loadUnlockQualitySnapshot(taskId, selectedHours.value)
+    if (!hasRelay.value)
+      routePerspective.value = 'system'
   }
   catch (cause) {
     error.value = cause instanceof Error ? cause.message : 'ChatGPT 解锁质量快照读取失败'
@@ -187,14 +232,14 @@ const distributionChartOption = computed(() => ({
   series: [{
     type: 'scatter',
     symbolSize: 18,
-    data: sortedNodes.value
-      .filter(node => node.system.samples_sent > 0)
-      .map((node, index) => ({
-        name: node.name,
-        remark: node.public_remark ?? '',
-        p95: node.system.ttfb_p95_ms,
-        status: node.system.status,
-        value: [node.system.ttfb_p50_ms, node.system.failure_percent],
+    data: routeEntries.value
+      .filter(entry => (entry.route?.samples_sent ?? 0) > 0)
+      .map((entry, index) => ({
+        name: entry.node.name,
+        remark: entry.node.public_remark ?? '',
+        p95: entry.route?.ttfb_p95_ms ?? 0,
+        status: entry.route?.status ?? 'unknown',
+        value: [entry.route?.ttfb_p50_ms ?? 0, entry.route?.failure_percent ?? 0],
         itemStyle: { color: nodeColor(index) },
       })),
   }],
@@ -220,15 +265,15 @@ const trendChartOption = computed(() => {
       axisLabel: { color: chartTextColor.value, formatter: isFailure ? '{value}%' : '{value}' },
       splitLine: { lineStyle: { color: chartSplitColor.value } },
     },
-    series: sortedNodes.value.map((node, index) => ({
-      name: node.name,
+    series: routeEntries.value.filter(entry => entry.route).map((entry, index) => ({
+      name: entry.node.name,
       type: 'line',
       showSymbol: false,
       connectNulls: false,
       sampling: 'lttb',
       lineStyle: { width: 2, color: nodeColor(index) },
       itemStyle: { color: nodeColor(index) },
-      data: node.system.trend.map((point) => {
+      data: (entry.route?.trend ?? []).map((point) => {
         const value = metric === 'failure'
           ? (point.samples_sent ? point.failure_count * 100 / point.samples_sent : 0)
           : metric === 'p95'
@@ -259,7 +304,7 @@ onMounted(() => loadData())
             ChatGPT 解锁线路
           </h1>
           <p class="text-sm text-muted-foreground">
-            使用节点实际系统 DNS 发起 HTTPS 请求，评估完整解锁链路
+            对比系统线路与代理中转访问 ChatGPT 的完整链路体验
           </p>
         </div>
       </div>
@@ -268,7 +313,7 @@ onMounted(() => loadData())
       </Button>
     </div>
 
-    <section class="mb-5 grid gap-4 rounded-md border bg-card/90 p-4 md:grid-cols-[minmax(0,1fr)_auto]">
+    <section class="mb-5 grid gap-4 rounded-md border bg-card/90 p-4 md:grid-cols-[minmax(0,1fr)_auto_auto]">
       <label class="min-w-0">
         <span class="mb-1.5 block text-xs text-muted-foreground">解锁质量任务</span>
         <select
@@ -290,6 +335,19 @@ onMounted(() => loadData())
           </TabsList>
         </Tabs>
       </div>
+      <div v-if="hasRelay">
+        <span class="mb-1.5 block text-xs text-muted-foreground">分析线路</span>
+        <Tabs v-model="routePerspective">
+          <TabsList>
+            <TabsTrigger value="system">
+              系统线路
+            </TabsTrigger>
+            <TabsTrigger value="relay">
+              中转线路
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
+      </div>
     </section>
 
     <div v-if="loading" class="flex min-h-[360px] items-center justify-center">
@@ -306,7 +364,7 @@ onMounted(() => loadData())
           <Icon icon="lucide:database" width="14" height="14" />
           后台快照 {{ generatedText }}
         </span>
-        <span>每 60 秒轻量检测，完整验证按后台任务设置执行</span>
+        <span>{{ routePerspective === 'relay' ? '经管理员配置的 HTTP/SOCKS5 中转发起真实 HTTPS 请求' : '使用节点系统网络与系统 DNS 发起真实 HTTPS 请求' }}</span>
         <span>访问本页不会发起探测</span>
       </div>
 
@@ -332,15 +390,42 @@ onMounted(() => loadData())
             最佳评分
           </p>
           <p class="mt-1 text-2xl font-semibold text-emerald-600 dark:text-emerald-400">
-            {{ formatUnlockQualityScore(bestNode?.score ?? null) }}
+            {{ formatUnlockQualityScore(bestEntry?.route?.score ?? null) }}
           </p>
         </div>
         <div class="rounded-md border bg-card p-4">
           <p class="text-xs text-muted-foreground">
-            当前地区可用
+            {{ routePerspective === 'relay' ? '中转地区可用' : '系统线路可用' }}
           </p>
           <p class="mt-1 text-2xl font-semibold">
             {{ availableNodes }}
+          </p>
+        </div>
+      </section>
+
+      <section v-if="hasRelay" class="mb-5 grid gap-3 border-y bg-muted/25 px-4 py-3 sm:grid-cols-3">
+        <div>
+          <p class="text-xs text-muted-foreground">
+            已配置中转节点
+          </p>
+          <p class="mt-1 text-lg font-semibold">
+            {{ relayedNodes.length }}
+          </p>
+        </div>
+        <div>
+          <p class="text-xs text-muted-foreground">
+            中转后评分提高
+          </p>
+          <p class="mt-1 text-lg font-semibold">
+            {{ improvedRelayNodes }} 个节点
+          </p>
+        </div>
+        <div>
+          <p class="text-xs text-muted-foreground">
+            平均中转收益
+          </p>
+          <p class="mt-1 text-lg font-semibold" :class="(averageRelayGain ?? 0) > 0 ? 'text-emerald-600 dark:text-emerald-400' : ''">
+            {{ averageRelayGain === null ? '--' : signedMetric(averageRelayGain, ' 分') }}
           </p>
         </div>
       </section>
@@ -359,6 +444,7 @@ onMounted(() => loadData())
           <p><strong class="text-foreground">HTTPS 失败：</strong>超时、断线或 TLS 失败；正常返回的 401、403、404 不算网络失败。</p>
           <p><strong class="text-foreground">DNS / 建连 / TLS：</strong>分别是查地址、建立 TCP 连接和完成加密握手的耗时。</p>
           <p><strong class="text-foreground">覆盖率：</strong>实际采样占应采样的比例；低于 80% 时暂不评分，避免数据太少误导。</p>
+          <p><strong class="text-foreground">中转收益：</strong>中转分减去系统线路分；正数代表使用中转后整体体验更好。</p>
         </div>
       </section>
 
@@ -391,33 +477,39 @@ onMounted(() => loadData())
           </div>
           <div class="space-y-2">
             <div
-              v-for="node in sortedNodes"
-              :key="node.uuid"
+              v-for="entry in routeEntries"
+              :key="entry.node.uuid"
               class="grid min-h-[84px] grid-cols-[28px_minmax(0,1fr)_auto] items-center gap-3 rounded-md border px-3 py-2"
             >
-              <span class="text-center font-semibold" :class="node.rank ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground'">
-                {{ node.rank ?? '–' }}
+              <span class="text-center font-semibold" :class="entry.rank ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground'">
+                {{ entry.rank ?? '–' }}
               </span>
               <div class="min-w-0">
                 <p class="truncate text-sm font-medium">
-                  {{ node.name }}
+                  {{ entry.node.name }}
                 </p>
-                <p v-if="node.public_remark" class="truncate text-xs text-muted-foreground">
-                  {{ node.public_remark }}
+                <p v-if="entry.node.public_remark" class="truncate text-xs text-muted-foreground">
+                  {{ entry.node.public_remark }}
                 </p>
-                <p class="mt-1 text-xs text-muted-foreground">
-                  {{ unlockQualityStatusLabel(node.system.status) }} · TTFB {{ node.system.ttfb_p50_ms.toFixed(0) }} / {{ node.system.ttfb_p95_ms.toFixed(0) }}ms · 失败 {{ formatUnlockQualityPercent(node.system.failure_percent) }}
+                <p v-if="entry.route" class="mt-1 text-xs text-muted-foreground">
+                  {{ unlockQualityStatusLabel(entry.route.status) }} · TTFB {{ entry.route.ttfb_p50_ms.toFixed(0) }} / {{ entry.route.ttfb_p95_ms.toFixed(0) }}ms · 失败 {{ formatUnlockQualityPercent(entry.route.failure_percent) }}
+                </p>
+                <p v-else class="mt-1 text-xs text-muted-foreground">
+                  未配置中转监测
                 </p>
                 <p class="mt-0.5 truncate text-[11px] text-muted-foreground">
-                  {{ exitLabel(node) }}
+                  {{ exitLabel(entry.route) }}
+                </p>
+                <p v-if="entry.node.relay && entry.node.relay_score_gain !== undefined" class="mt-0.5 truncate text-[11px]" :class="entry.node.relay_score_gain > 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground'">
+                  中转收益 {{ signedMetric(entry.node.relay_score_gain, ' 分') }} · TTFB 改善 {{ signedMetric(entry.node.relay_ttfb_gain_ms, ' ms') }}
                 </p>
               </div>
               <div class="text-right">
                 <p class="text-lg font-semibold tabular-nums">
-                  {{ formatUnlockQualityScore(node.score) }}
+                  {{ formatUnlockQualityScore(entry.route?.score ?? null) }}
                 </p>
-                <Badge :class="gradeClass(node.grade)" class="border-0">
-                  {{ node.grade }}
+                <Badge :class="gradeClass(entry.route?.grade ?? '未评级')" class="border-0">
+                  {{ entry.route?.grade ?? '未配置' }}
                 </Badge>
               </div>
             </div>
@@ -474,7 +566,7 @@ onMounted(() => loadData())
             <article
               v-for="node in sortedNodes"
               :key="node.uuid"
-              class="grid gap-3 rounded-md border px-3 py-3 sm:grid-cols-[minmax(160px,1.4fr)_repeat(5,minmax(76px,1fr))]"
+              class="grid gap-3 rounded-md border px-3 py-3 sm:grid-cols-[minmax(160px,1.2fr)_minmax(180px,1.5fr)_minmax(180px,1.5fr)_minmax(120px,1fr)]"
             >
               <div class="min-w-0">
                 <p class="truncate text-sm font-medium">
@@ -483,48 +575,55 @@ onMounted(() => loadData())
                 <p v-if="node.public_remark" class="truncate text-xs text-muted-foreground">
                   {{ node.public_remark }}
                 </p>
-                <span class="mt-1 inline-flex rounded px-2 py-0.5 text-xs" :class="statusClass(node.system.status)">
-                  {{ unlockQualityStatusLabel(node.system.status) }}
-                </span>
+                <p class="mt-1 text-[11px] text-muted-foreground">
+                  {{ exitLabel(node.system) }}
+                </p>
+              </div>
+              <div class="rounded bg-muted/35 px-3 py-2">
+                <div class="flex items-center justify-between gap-2">
+                  <p class="text-xs font-medium">
+                    系统线路
+                  </p>
+                  <span class="rounded px-1.5 py-0.5 text-[11px]" :class="statusClass(node.system.status)">{{ unlockQualityStatusLabel(node.system.status) }}</span>
+                </div>
+                <p class="mt-1 text-xs tabular-nums">
+                  TTFB {{ node.system.ttfb_p50_ms.toFixed(0) }} / {{ node.system.ttfb_p95_ms.toFixed(0) }} ms
+                </p>
+                <p class="mt-1 text-[11px] text-muted-foreground tabular-nums">
+                  失败 {{ formatUnlockQualityPercent(node.system.failure_percent) }} · 总耗时 {{ node.system.total_p50_ms.toFixed(0) }} ms · 得分 {{ formatUnlockQualityScore(node.system.score) }}
+                </p>
+              </div>
+              <div class="rounded bg-muted/35 px-3 py-2">
+                <template v-if="node.relay">
+                  <div class="flex items-center justify-between gap-2">
+                    <p class="text-xs font-medium">
+                      中转线路
+                    </p>
+                    <span class="rounded px-1.5 py-0.5 text-[11px]" :class="statusClass(node.relay.status)">{{ unlockQualityStatusLabel(node.relay.status) }}</span>
+                  </div>
+                  <p class="mt-1 text-xs tabular-nums">
+                    TTFB {{ node.relay.ttfb_p50_ms.toFixed(0) }} / {{ node.relay.ttfb_p95_ms.toFixed(0) }} ms
+                  </p>
+                  <p class="mt-1 text-[11px] text-muted-foreground tabular-nums">
+                    失败 {{ formatUnlockQualityPercent(node.relay.failure_percent) }} · 总耗时 {{ node.relay.total_p50_ms.toFixed(0) }} ms · 得分 {{ formatUnlockQualityScore(node.relay.score) }}
+                  </p>
+                </template>
+                <p v-else class="text-xs text-muted-foreground">
+                  未配置中转监测
+                </p>
               </div>
               <div>
                 <p class="text-[11px] text-muted-foreground">
-                  TTFB P50 / P95
+                  中转收益
                 </p>
-                <p class="mt-1 text-sm font-medium tabular-nums">
-                  {{ node.system.ttfb_p50_ms.toFixed(0) }} / {{ node.system.ttfb_p95_ms.toFixed(0) }} ms
+                <p class="mt-1 text-sm font-medium tabular-nums" :class="(node.relay_score_gain ?? 0) > 0 ? 'text-emerald-600 dark:text-emerald-400' : ''">
+                  {{ signedMetric(node.relay_score_gain, ' 分') }}
                 </p>
-              </div>
-              <div>
-                <p class="text-[11px] text-muted-foreground">
-                  DNS / 建连
+                <p class="mt-1 text-[11px] text-muted-foreground tabular-nums">
+                  TTFB {{ signedMetric(node.relay_ttfb_gain_ms, ' ms') }} · 失败率 {{ signedMetric(node.relay_failure_gain_percent, '%') }}
                 </p>
-                <p class="mt-1 text-sm font-medium tabular-nums">
-                  {{ node.system.dns_ms.toFixed(0) }} / {{ node.system.connect_ms.toFixed(0) }} ms
-                </p>
-              </div>
-              <div>
-                <p class="text-[11px] text-muted-foreground">
-                  TLS / 总耗时
-                </p>
-                <p class="mt-1 text-sm font-medium tabular-nums">
-                  {{ node.system.tls_ms.toFixed(0) }} / {{ node.system.total_p50_ms.toFixed(0) }} ms
-                </p>
-              </div>
-              <div>
-                <p class="text-[11px] text-muted-foreground">
-                  失败 / 覆盖
-                </p>
-                <p class="mt-1 text-sm font-medium tabular-nums">
-                  {{ formatUnlockQualityPercent(node.system.failure_percent) }} / {{ formatUnlockQualityPercent(node.system.coverage_percent) }}
-                </p>
-              </div>
-              <div>
-                <p class="text-[11px] text-muted-foreground">
-                  系统 DNS 相对改善
-                </p>
-                <p class="mt-1 text-sm font-medium tabular-nums">
-                  {{ node.improvement_score === undefined ? '--' : `${node.improvement_score > 0 ? '+' : ''}${node.improvement_score.toFixed(1)}` }}
+                <p v-if="node.relay" class="mt-1 truncate text-[11px] text-muted-foreground">
+                  {{ exitLabel(node.relay) }}
                 </p>
               </div>
             </article>
