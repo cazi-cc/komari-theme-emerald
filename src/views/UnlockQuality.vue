@@ -107,7 +107,7 @@ const availableNodes = computed(() => routeEntries.value.filter(entry => entry.r
 const entryOptions = computed(() => {
   if (!snapshot.value || !pathWindow.value)
     return []
-  const taskIDs = new Set(snapshot.value.path_bindings.map(binding => binding.ping_task_id))
+  const taskIDs = new Set((snapshot.value.path_bindings ?? []).map(binding => binding.ping_task_id))
   const entries = new Map<string, { uuid: string, name: string }>()
   for (const task of pathWindow.value.tasks) {
     if (!taskIDs.has(task.id))

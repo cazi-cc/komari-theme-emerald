@@ -75,7 +75,7 @@ export interface UnlockQualitySnapshot {
   service: string
   window_hours: number
   generated_at: string
-  path_bindings: UnlockQualityPathBinding[]
+  path_bindings?: UnlockQualityPathBinding[]
   nodes: UnlockQualitySnapshotNode[]
 }
 
