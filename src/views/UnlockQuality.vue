@@ -696,11 +696,13 @@ onMounted(() => loadData())
         </div>
         <div class="grid gap-x-6 gap-y-2 text-xs leading-5 text-muted-foreground sm:grid-cols-2 lg:grid-cols-3">
           <p><strong class="text-foreground">地区可用：</strong>服务确认该出口地区没有被限制；不代表已经登录账号。</p>
-          <p><strong class="text-foreground">TTFB：</strong>发出请求到收到第一个字节的时间，越低越快。</p>
+          <p><strong class="text-foreground">TTFB：</strong>从发出请求到收到第一个字节，已包含 DNS、TCP 建连和 TLS 握手，越低越快。</p>
           <p><strong class="text-foreground">P50 / P95：</strong>一半请求不超过 P50；95% 请求不超过 P95，P95 更能反映偶发卡顿。</p>
           <p><strong class="text-foreground">HTTPS 失败：</strong>超时、断线或 TLS 失败；正常返回的 401、403、404 不算网络失败。</p>
-          <p><strong class="text-foreground">DNS / 建连 / TLS：</strong>分别是查地址、建立 TCP 连接和完成加密握手的耗时。</p>
+          <p><strong class="text-foreground">DNS / 建连 / TLS：</strong>用于定位慢在哪个阶段；它们已包含在 TTFB 内，不再重复加权。</p>
+          <p><strong class="text-foreground">尾部稳定性：</strong>比较 P95 与 P50 的毫秒差值，差距越小说明偶发卡顿越少。</p>
           <p><strong class="text-foreground">覆盖率：</strong>实际采样占应采样的比例；低于 80% 时暂不评分，避免数据太少误导。</p>
+          <p><strong class="text-foreground">与普通 HTTP 任务：</strong>请求头、采样时刻、间隔和已有数据时长不同；“1 天”只是查询上限，不代表已经采满一天，数值不能直接混用。</p>
           <p><strong class="text-foreground">链式代理：</strong>切换到“链式代理估算”，可选择入口节点并比较不同落地节点。</p>
         </div>
       </section>
@@ -729,7 +731,7 @@ onMounted(() => loadData())
               节点排名
             </h2>
             <p class="text-xs text-muted-foreground">
-              地区可用 40%、请求成功 25%、TTFB 20%、连接与 TLS 10%、稳定性 5%。
+              地区可用 25%、HTTPS 成功 30%、TTFB 40%、尾部稳定性 5%；P95 权重高于 P50，25 / 50 / 100 / 200 / 500 / 1500ms 逐级扣分。
             </p>
           </div>
           <div class="space-y-2">
@@ -842,6 +844,9 @@ onMounted(() => loadData())
                 </p>
                 <p class="mt-1 text-[11px] text-muted-foreground tabular-nums">
                   失败 {{ formatUnlockQualityPercent(node.system.failure_percent) }} · 总耗时 {{ node.system.total_p50_ms.toFixed(0) }} ms · 得分 {{ formatUnlockQualityScore(node.system.score) }}
+                </p>
+                <p v-if="node.system.components" class="mt-1 text-[11px] text-muted-foreground tabular-nums">
+                  构成：可用 {{ node.system.components.unlock.toFixed(1) }} · 成功 {{ node.system.components.reliability.toFixed(1) }} · TTFB {{ node.system.components.ttfb.toFixed(1) }} · 尾部 {{ node.system.components.stability.toFixed(1) }}
                 </p>
               </div>
               <div>
