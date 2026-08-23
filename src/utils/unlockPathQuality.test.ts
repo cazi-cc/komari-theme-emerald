@@ -58,6 +58,7 @@ const networkWindow: NetworkComparisonWindow = {
     grade_thresholds: { excellent: 90, good: 75, fair: 60 },
   },
   tasks: [
+    { id: 20, name: '福建移动', type: 'icmp', interval: 60, node_count: 1, rankable_node_count: 1, ranking_available: true, nodes: [{ uuid: 'entry-a', name: 'Entry A', region: '', rank: 1, rankable: true, score: 85, grade: '良好', p50: 30, p95: 50, loss_percent: 1, loss_count: 1, samples: 60, expected_samples: 60, coverage_percent: 100, volatility: 0.1 }] },
     { id: 10, name: 'Exit A v4', type: 'icmp', interval: 60, node_count: 1, rankable_node_count: 1, ranking_available: true, nodes: [{ uuid: 'entry-a', name: 'Entry A', region: '', rank: 1, rankable: true, score: 80, grade: '良好', p50: 20, p95: 30, loss_percent: 5, loss_count: 3, samples: 60, expected_samples: 60, coverage_percent: 100, volatility: 0.1 }] },
     { id: 11, name: 'Exit A v6', type: 'icmp', interval: 60, node_count: 1, rankable_node_count: 1, ranking_available: true, nodes: [{ uuid: 'entry-a', name: 'Entry A', region: '', rank: 1, rankable: true, score: 95, grade: '优秀', p50: 10, p95: 20, loss_percent: 0, loss_count: 0, samples: 60, expected_samples: 60, coverage_percent: 100, volatility: 0.1 }] },
     { id: 12, name: 'Entry A v4', type: 'icmp', interval: 60, node_count: 1, rankable_node_count: 1, ranking_available: true, nodes: [{ uuid: 'entry-a', name: 'Entry A', region: '', rank: 1, rankable: true, score: 100, grade: '优秀', p50: 1, p95: 1, loss_percent: 0, loss_count: 0, samples: 60, expected_samples: 60, coverage_percent: 100, volatility: 0 }] },
@@ -73,5 +74,19 @@ describe('buildEstimatedUnlockPaths', () => {
     expect(paths[0]?.estimated_p50_ms).toBe(110)
     expect(paths[0]?.estimated_p95_ms).toBe(170)
     expect(paths[0]?.estimated_failure_percent).toBe(10)
+  })
+
+  test('adds the selected domestic access segment and models a cold proxy connection', () => {
+    const paths = buildEstimatedUnlockPaths('entry-a', snapshot, networkWindow, {
+      access_task_id: 20,
+      scenario: 'first',
+    })
+    expect(paths).toHaveLength(1)
+    expect(paths[0]?.access_task_name).toBe('福建移动')
+    expect(paths[0]?.daily_p50_ms).toBe(140)
+    expect(paths[0]?.daily_p95_ms).toBe(220)
+    expect(paths[0]?.first_p50_ms).toBe(220)
+    expect(paths[0]?.first_p95_ms).toBe(360)
+    expect(paths[0]?.estimated_failure_percent).toBe(10.9)
   })
 })

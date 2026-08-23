@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { NetworkComparisonManifest, NetworkComparisonWindow } from '@/utils/networkComparison'
-import type { EstimatedUnlockPath } from '@/utils/unlockPathQuality'
+import type { EstimatedUnlockPath, UnlockPathScenario } from '@/utils/unlockPathQuality'
 import type {
   UnlockQualityPublicTask,
   UnlockQualityRouteSummary,
@@ -52,6 +52,8 @@ const analysisMode = ref<AnalysisMode>('direct')
 const pathManifest = ref<NetworkComparisonManifest | null>(null)
 const pathWindow = ref<NetworkComparisonWindow | null>(null)
 const selectedEntryUUID = ref('')
+const selectedAccessTaskID = ref(0)
+const selectedPathScenario = ref<UnlockPathScenario>('daily')
 const pathLoading = ref(false)
 const pathError = ref('')
 const loading = ref(true)
@@ -73,6 +75,7 @@ const trendMetricOptions: Array<{ value: TrendMetric, label: string }> = [
   { value: 'failure', label: '失败率' },
 ]
 const chartColors = ['#059669', '#2563EB', '#F97316', '#DB2777', '#7C3AED', '#0891B2', '#65A30D', '#DC2626']
+const domesticAccessTaskPattern = /福建.*(?:移动|电信|联通)/
 
 const selectedTask = computed(() => tasks.value.find(task => task.id === selectedTaskId.value) ?? null)
 const routeEntries = computed<RouteNodeEntry[]>(() => {
@@ -119,10 +122,26 @@ const entryOptions = computed(() => {
   }
   return [...entries.values()].sort((left, right) => left.name.localeCompare(right.name, 'zh-CN'))
 })
+const accessTaskOptions = computed(() => {
+  if (!snapshot.value || !pathWindow.value || !selectedEntryUUID.value)
+    return []
+  const relayTaskIDs = new Set((snapshot.value.path_bindings ?? []).map(binding => binding.ping_task_id))
+  return pathWindow.value.tasks
+    .filter(task => task.type === 'icmp' && !relayTaskIDs.has(task.id))
+    .filter(task => task.nodes.some(node => node.uuid === selectedEntryUUID.value && node.p50 !== null && node.p95 !== null))
+    .sort((left, right) => {
+      const leftPreferred = domesticAccessTaskPattern.test(left.name) ? 0 : 1
+      const rightPreferred = domesticAccessTaskPattern.test(right.name) ? 0 : 1
+      return leftPreferred - rightPreferred || left.name.localeCompare(right.name, 'zh-CN')
+    })
+})
 const estimatedPaths = computed<EstimatedUnlockPath[]>(() => {
   if (!snapshot.value || !pathWindow.value)
     return []
-  return buildEstimatedUnlockPaths(selectedEntryUUID.value, snapshot.value, pathWindow.value)
+  return buildEstimatedUnlockPaths(selectedEntryUUID.value, snapshot.value, pathWindow.value, {
+    access_task_id: selectedAccessTaskID.value || null,
+    scenario: selectedPathScenario.value,
+  })
 })
 const bestEstimatedPath = computed(() => estimatedPaths.value.find(path => path.score !== null) ?? null)
 const generatedText = computed(() => snapshot.value?.generated_at ? dayjs(snapshot.value.generated_at).format('MM-DD HH:mm:ss') : '--')
@@ -242,6 +261,12 @@ watch(analysisMode, async (mode) => {
     await loadPathData()
 })
 
+watch(accessTaskOptions, (options) => {
+  if (options.some(task => task.id === selectedAccessTaskID.value))
+    return
+  selectedAccessTaskID.value = options.find(task => domesticAccessTaskPattern.test(task.name))?.id ?? options[0]?.id ?? 0
+}, { immediate: true })
+
 const distributionChartOption = computed(() => ({
   animationDuration: appStore.disablePageAnimation ? 0 : 350,
   tooltip: {
@@ -299,7 +324,8 @@ const pathDistributionChartOption = computed(() => ({
         return ''
       const path = data.path
       const remark = path.exit_remark ? `<br/><span style="opacity:.72">${escapeHtml(path.exit_remark)}</span>` : ''
-      return `<strong>${escapeHtml(path.exit_name)}</strong>${remark}<br/>经 IPv${path.family} · ${escapeHtml(path.ping_task_name)}<br/>估算 P50 / P95 ${path.estimated_p50_ms.toFixed(0)} / ${path.estimated_p95_ms.toFixed(0)} ms<br/>估算失败 ${formatUnlockQualityPercent(path.estimated_failure_percent)}<br/>组合评分 ${formatUnlockQualityScore(path.score)}`
+      const access = path.access_task_name ? `${escapeHtml(path.access_task_name)} → ` : ''
+      return `<strong>${escapeHtml(path.exit_name)}</strong>${remark}<br/>${access}${escapeHtml(path.ping_task_name)} · IPv${path.family}<br/>估算 P50 / P95 ${path.estimated_p50_ms.toFixed(0)} / ${path.estimated_p95_ms.toFixed(0)} ms<br/>估算失败 ${formatUnlockQualityPercent(path.estimated_failure_percent)}<br/>组合评分 ${formatUnlockQualityScore(path.score)}`
     },
   },
   grid: { left: 58, right: 22, top: 28, bottom: 50 },
@@ -348,10 +374,17 @@ const pathLatencyChartOption = computed(() => ({
   },
   series: [
     {
+      name: '国内接入参考',
+      type: 'bar',
+      stack: 'latency',
+      data: estimatedPaths.value.map(path => (path.access?.p50 ?? 0) * (selectedPathScenario.value === 'first' ? 3 : 1)),
+      itemStyle: { color: '#F59E0B' },
+    },
+    {
       name: '入口到落地 P50',
       type: 'bar',
       stack: 'latency',
-      data: estimatedPaths.value.map(path => path.link.p50 ?? 0),
+      data: estimatedPaths.value.map(path => (path.link.p50 ?? 0) * (selectedPathScenario.value === 'first' ? 3 : 1)),
       itemStyle: { color: '#2563EB' },
     },
     {
@@ -485,12 +518,12 @@ onMounted(() => loadData())
         {{ pathError }}
       </div>
       <Empty
-        v-else-if="entryOptions.length === 0 || estimatedPaths.length === 0"
+        v-else-if="entryOptions.length === 0"
         title="尚无可组合线路"
         description="需要至少一个指向落地节点的现有 ICMP 延迟任务，以及该落地节点的 ChatGPT 检测数据。"
       />
       <template v-else>
-        <section class="mb-4 grid gap-4 border-y bg-muted/25 px-4 py-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+        <section class="mb-4 grid gap-4 border-y bg-muted/25 px-4 py-3 md:grid-cols-3 md:items-end">
           <label class="min-w-0">
             <span class="mb-1.5 block text-xs text-muted-foreground">入口节点</span>
             <select
@@ -502,8 +535,35 @@ onMounted(() => loadData())
               </option>
             </select>
           </label>
-          <p class="text-xs leading-5 text-muted-foreground md:max-w-[520px]">
-            入口节点是用户流量首先连接的服务器；落地节点是最终连接 ChatGPT 的出口服务器。这里只复用既有快照进行估算，不会让 Agent 增加探测。
+          <label class="min-w-0">
+            <span class="mb-1.5 block text-xs text-muted-foreground">国内接入参考</span>
+            <select
+              v-model.number="selectedAccessTaskID"
+              class="h-10 w-full rounded-md border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring"
+            >
+              <option :value="0">
+                不计国内接入段
+              </option>
+              <option v-for="task in accessTaskOptions" :key="task.id" :value="task.id">
+                {{ task.name }}
+              </option>
+            </select>
+          </label>
+          <div>
+            <span class="mb-1.5 block text-xs text-muted-foreground">体验场景</span>
+            <Tabs v-model="selectedPathScenario">
+              <TabsList class="grid w-full grid-cols-2">
+                <TabsTrigger value="daily">
+                  日常复用
+                </TabsTrigger>
+                <TabsTrigger value="first">
+                  首次连接
+                </TabsTrigger>
+              </TabsList>
+            </Tabs>
+          </div>
+          <p class="text-xs leading-5 text-muted-foreground md:col-span-3">
+            国内任务由入口节点反向探测目标，用作本地宽带到入口的 RTT 参考；真实上下行路由可能不完全对称。入口节点是流量首先连接的服务器，落地节点是最终连接 ChatGPT 的出口服务器。
           </p>
         </section>
 
@@ -512,133 +572,146 @@ onMounted(() => loadData())
             <Icon icon="lucide:database" width="14" height="14" />
             后台快照 {{ generatedText }}
           </span>
-          <span>估算链路：入口节点 → 落地节点（出口节点）→ ChatGPT</span>
+          <span>估算链路：国内接入参考 → 入口节点 → 落地节点（出口节点）→ ChatGPT</span>
           <span>访问本页不会发起探测</span>
         </div>
 
-        <section class="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
-          <div class="rounded-md border bg-card p-4">
-            <p class="text-xs text-muted-foreground">
-              可比较落地节点
-            </p>
-            <p class="mt-1 text-2xl font-semibold">
-              {{ estimatedPaths.length }}
-            </p>
-          </div>
-          <div class="rounded-md border bg-card p-4">
-            <p class="text-xs text-muted-foreground">
-              当前最佳落地
-            </p>
-            <p class="mt-1 truncate text-base font-semibold">
-              {{ bestEstimatedPath?.exit_name ?? '--' }}
-            </p>
-          </div>
-          <div class="rounded-md border bg-card p-4">
-            <p class="text-xs text-muted-foreground">
-              最佳组合评分
-            </p>
-            <p class="mt-1 text-2xl font-semibold text-emerald-600 dark:text-emerald-400">
-              {{ formatUnlockQualityScore(bestEstimatedPath?.score ?? null) }}
-            </p>
-          </div>
-          <div class="rounded-md border bg-card p-4">
-            <p class="text-xs text-muted-foreground">
-              最佳估算 P50
-            </p>
-            <p class="mt-1 text-2xl font-semibold">
-              {{ bestEstimatedPath ? `${bestEstimatedPath.estimated_p50_ms.toFixed(0)} ms` : '--' }}
-            </p>
-          </div>
-        </section>
+        <Empty
+          v-if="estimatedPaths.length === 0"
+          class="mb-5"
+          title="当前组合暂无完整数据"
+          description="请选择在该入口节点上有有效采样的国内参考任务，或等待后台生成下一份快照。"
+        />
 
-        <section class="mb-5 border-y bg-muted/25 px-4 py-3">
-          <div class="mb-2 flex items-center gap-2">
-            <Icon icon="lucide:calculator" width="16" height="16" class="text-emerald-600 dark:text-emerald-400" />
-            <h2 class="text-sm font-semibold">
-              估算方法
-            </h2>
-          </div>
-          <div class="grid gap-x-6 gap-y-2 text-xs leading-5 text-muted-foreground sm:grid-cols-2 lg:grid-cols-3">
-            <p><strong class="text-foreground">估算延迟：</strong>入口到落地的 P50/P95，加上落地访问 ChatGPT 的 TTFB。</p>
-            <p><strong class="text-foreground">估算失败：</strong>按两段链路任意一段失败的联合概率计算，不直接相加百分比。</p>
-            <p><strong class="text-foreground">组合评分：</strong>入口到落地占 35%，落地到 ChatGPT 占 65%，并限制不能掩盖明显短板。</p>
-            <p><strong class="text-foreground">协议选择：</strong>同一落地节点同时有 IPv4/IPv6 时，自动采用当前质量更好的有效线路。</p>
-            <p><strong class="text-foreground">适用范围：</strong>用于快速比较落地节点，不等同于真实代理软件的完整会话测试。</p>
-            <p><strong class="text-foreground">资源影响：</strong>只读取服务器定期生成的固定快照，Agent CPU、内存和请求数均不增加。</p>
-          </div>
-        </section>
-
-        <div class="grid gap-5 md:grid-cols-2">
-          <section class="rounded-md border bg-card p-4">
-            <div class="mb-3">
-              <h2 class="font-semibold">
-                落地节点排名
-              </h2>
+        <template v-else>
+          <section class="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <div class="rounded-md border bg-card p-4">
               <p class="text-xs text-muted-foreground">
-                比较同一个入口节点搭配不同落地节点后的估算体验。
+                可比较落地节点
+              </p>
+              <p class="mt-1 text-2xl font-semibold">
+                {{ estimatedPaths.length }}
               </p>
             </div>
-            <div class="space-y-2">
-              <div
-                v-for="(path, index) in estimatedPaths"
-                :key="path.exit_uuid"
-                class="grid min-h-[92px] grid-cols-[28px_minmax(0,1fr)_auto] items-center gap-3 rounded-md border px-3 py-2"
-              >
-                <span class="text-center font-semibold text-emerald-600 dark:text-emerald-400">{{ index + 1 }}</span>
-                <div class="min-w-0">
-                  <p class="truncate text-sm font-medium">
-                    {{ path.exit_name }}
-                  </p>
-                  <p v-if="path.exit_remark" class="truncate text-xs text-muted-foreground">
-                    {{ path.exit_remark }}
-                  </p>
-                  <p class="mt-1 text-xs text-muted-foreground">
-                    估算 P50 {{ path.estimated_p50_ms.toFixed(0) }}ms · P95 {{ path.estimated_p95_ms.toFixed(0) }}ms · 失败 {{ formatUnlockQualityPercent(path.estimated_failure_percent) }}
-                  </p>
-                  <p class="mt-0.5 truncate text-[11px] text-muted-foreground">
-                    经 IPv{{ path.family }} · {{ path.ping_task_name }} · {{ exitLabel(path.unlock.system) }}
-                  </p>
-                </div>
-                <div class="text-right">
-                  <p class="text-lg font-semibold tabular-nums">
-                    {{ formatUnlockQualityScore(path.score) }}
-                  </p>
-                  <Badge :class="gradeClass(path.grade)" class="border-0">
-                    {{ path.grade }}
-                  </Badge>
+            <div class="rounded-md border bg-card p-4">
+              <p class="text-xs text-muted-foreground">
+                当前最佳落地
+              </p>
+              <p class="mt-1 truncate text-base font-semibold">
+                {{ bestEstimatedPath?.exit_name ?? '--' }}
+              </p>
+            </div>
+            <div class="rounded-md border bg-card p-4">
+              <p class="text-xs text-muted-foreground">
+                {{ selectedPathScenario === 'first' ? '首次连接评分' : '日常访问评分' }}
+              </p>
+              <p class="mt-1 text-2xl font-semibold text-emerald-600 dark:text-emerald-400">
+                {{ formatUnlockQualityScore(bestEstimatedPath?.score ?? null) }}
+              </p>
+            </div>
+            <div class="rounded-md border bg-card p-4">
+              <p class="text-xs text-muted-foreground">
+                {{ selectedPathScenario === 'first' ? '首次连接 P50' : '日常访问 P50' }}
+              </p>
+              <p class="mt-1 text-2xl font-semibold">
+                {{ bestEstimatedPath ? `${bestEstimatedPath.estimated_p50_ms.toFixed(0)} ms` : '--' }}
+              </p>
+            </div>
+          </section>
+
+          <section class="mb-5 border-y bg-muted/25 px-4 py-3">
+            <div class="mb-2 flex items-center gap-2">
+              <Icon icon="lucide:calculator" width="16" height="16" class="text-emerald-600 dark:text-emerald-400" />
+              <h2 class="text-sm font-semibold">
+                估算方法
+              </h2>
+            </div>
+            <div class="grid gap-x-6 gap-y-2 text-xs leading-5 text-muted-foreground sm:grid-cols-2 lg:grid-cols-3">
+              <p><strong class="text-foreground">日常复用：</strong>国内接入 RTT、入口到落地 RTT 与落地访问 ChatGPT 的 TTFB 串联相加。</p>
+              <p><strong class="text-foreground">首次连接：</strong>在日常延迟上，为前两段各增加约 1 次 TCP 与 1 次 TLS 往返；出口到 ChatGPT 的握手已在 TTFB 内，不重复计算。</p>
+              <p><strong class="text-foreground">估算失败：</strong>按三段任意一段失败的联合概率计算，不直接相加百分比。</p>
+              <p><strong class="text-foreground">组合评分：</strong>失败率 40%、P50 30%、P95 25%、尾部波动 5%，按当前所选体验场景评分。</p>
+              <p><strong class="text-foreground">协议选择：</strong>同一落地节点同时有 IPv4/IPv6 时，自动采用当前质量更好的有效线路。</p>
+              <p><strong class="text-foreground">适用范围：</strong>用于逼近本地访问体验；不同代理协议的多路复用、QUIC、0-RTT 与路由不对称会造成偏差。</p>
+              <p><strong class="text-foreground">资源影响：</strong>只读取服务器定期生成的固定快照，Agent CPU、内存和请求数均不增加。</p>
+            </div>
+          </section>
+
+          <div class="grid gap-5 md:grid-cols-2">
+            <section class="rounded-md border bg-card p-4">
+              <div class="mb-3">
+                <h2 class="font-semibold">
+                  落地节点排名
+                </h2>
+                <p class="text-xs text-muted-foreground">
+                  比较同一个入口节点搭配不同落地节点后的估算体验。
+                </p>
+              </div>
+              <div class="space-y-2">
+                <div
+                  v-for="(path, index) in estimatedPaths"
+                  :key="path.exit_uuid"
+                  class="grid min-h-[92px] grid-cols-[28px_minmax(0,1fr)_auto] items-center gap-3 rounded-md border px-3 py-2"
+                >
+                  <span class="text-center font-semibold text-emerald-600 dark:text-emerald-400">{{ index + 1 }}</span>
+                  <div class="min-w-0">
+                    <p class="truncate text-sm font-medium">
+                      {{ path.exit_name }}
+                    </p>
+                    <p v-if="path.exit_remark" class="truncate text-xs text-muted-foreground">
+                      {{ path.exit_remark }}
+                    </p>
+                    <p class="mt-1 text-xs text-muted-foreground">
+                      估算 P50 {{ path.estimated_p50_ms.toFixed(0) }}ms · P95 {{ path.estimated_p95_ms.toFixed(0) }}ms · 失败 {{ formatUnlockQualityPercent(path.estimated_failure_percent) }}
+                    </p>
+                    <p class="mt-0.5 truncate text-[11px] text-muted-foreground">
+                      日常 {{ formatUnlockQualityScore(path.daily_score) }} 分 · 首次 {{ formatUnlockQualityScore(path.first_score) }} 分
+                    </p>
+                    <p class="mt-0.5 truncate text-[11px] text-muted-foreground">
+                      {{ path.access_task_name || '未计国内接入' }} · 经 IPv{{ path.family }} · {{ path.ping_task_name }} · {{ exitLabel(path.unlock.system) }}
+                    </p>
+                  </div>
+                  <div class="text-right">
+                    <p class="text-lg font-semibold tabular-nums">
+                      {{ formatUnlockQualityScore(path.score) }}
+                    </p>
+                    <Badge :class="gradeClass(path.grade)" class="border-0">
+                      {{ path.grade }}
+                    </Badge>
+                  </div>
                 </div>
               </div>
-            </div>
-          </section>
+            </section>
 
-          <section class="rounded-md border bg-card p-4">
-            <div class="mb-3">
-              <h2 class="font-semibold">
-                估算延迟 / 失败分布
-              </h2>
-              <p class="text-xs text-muted-foreground">
-                越靠左下角越好；悬停可查看采用的协议和任务。
-              </p>
-            </div>
-            <div class="quality-chart">
-              <VChart class="size-full" autoresize :option="pathDistributionChartOption" />
-            </div>
-          </section>
+            <section class="rounded-md border bg-card p-4">
+              <div class="mb-3">
+                <h2 class="font-semibold">
+                  估算延迟 / 失败分布
+                </h2>
+                <p class="text-xs text-muted-foreground">
+                  越靠左下角越好；悬停可查看采用的协议和任务。
+                </p>
+              </div>
+              <div class="quality-chart">
+                <VChart class="size-full" autoresize :option="pathDistributionChartOption" />
+              </div>
+            </section>
 
-          <section class="rounded-md border bg-card p-4 md:col-span-2">
-            <div class="mb-3">
-              <h2 class="font-semibold">
-                P50 延迟构成
-              </h2>
-              <p class="text-xs text-muted-foreground">
-                蓝色是入口到落地，绿色是落地到 ChatGPT；堆叠长度为估算总耗时。
-              </p>
-            </div>
-            <div class="quality-chart">
-              <VChart class="size-full" autoresize :option="pathLatencyChartOption" />
-            </div>
-          </section>
-        </div>
+            <section class="rounded-md border bg-card p-4 md:col-span-2">
+              <div class="mb-3">
+                <h2 class="font-semibold">
+                  {{ selectedPathScenario === 'first' ? '首次连接 P50 构成' : '日常访问 P50 构成' }}
+                </h2>
+                <p class="text-xs text-muted-foreground">
+                  黄色是国内接入参考，蓝色是入口到落地，绿色是落地到 ChatGPT；堆叠长度为估算总耗时。
+                </p>
+              </div>
+              <div class="quality-chart">
+                <VChart class="size-full" autoresize :option="pathLatencyChartOption" />
+              </div>
+            </section>
+          </div>
+        </template>
       </template>
     </template>
 
