@@ -637,8 +637,8 @@ onMounted(() => loadData())
             </div>
           </section>
 
-          <div class="grid gap-5 md:grid-cols-2">
-            <section class="rounded-md border bg-card p-4">
+          <div class="grid min-w-0 gap-5 md:grid-cols-2">
+            <section class="min-w-0 rounded-md border bg-card p-4">
               <div class="mb-3">
                 <h2 class="font-semibold">
                   落地节点排名
@@ -683,7 +683,7 @@ onMounted(() => loadData())
               </div>
             </section>
 
-            <section class="rounded-md border bg-card p-4">
+            <section class="min-w-0 rounded-md border bg-card p-4">
               <div class="mb-3">
                 <h2 class="font-semibold">
                   估算延迟 / 失败分布
@@ -697,7 +697,7 @@ onMounted(() => loadData())
               </div>
             </section>
 
-            <section class="rounded-md border bg-card p-4 md:col-span-2">
+            <section class="min-w-0 rounded-md border bg-card p-4 md:col-span-2">
               <div class="mb-3">
                 <h2 class="font-semibold">
                   {{ selectedPathScenario === 'first' ? '首次连接 P50 构成' : '日常访问 P50 构成' }}
@@ -797,8 +797,8 @@ onMounted(() => loadData())
         </TabsList>
       </Tabs>
 
-      <div class="grid gap-5 md:grid-cols-2">
-        <section class="rounded-md border bg-card p-4 md:block" :class="[activeSection === 'ranking' ? 'block' : 'hidden']">
+      <div class="grid min-w-0 gap-5 md:grid-cols-2">
+        <section class="min-w-0 rounded-md border bg-card p-4 md:block" :class="[activeSection === 'ranking' ? 'block' : 'hidden']">
           <div class="mb-3">
             <h2 class="font-semibold">
               节点排名
@@ -842,7 +842,7 @@ onMounted(() => loadData())
           </div>
         </section>
 
-        <section class="rounded-md border bg-card p-4 md:block" :class="[activeSection === 'distribution' ? 'block' : 'hidden']">
+        <section class="min-w-0 rounded-md border bg-card p-4 md:block" :class="[activeSection === 'distribution' ? 'block' : 'hidden']">
           <div class="mb-3">
             <h2 class="font-semibold">
               TTFB / HTTPS 失败分布
@@ -856,7 +856,7 @@ onMounted(() => loadData())
           </div>
         </section>
 
-        <section class="rounded-md border bg-card p-4 md:col-span-2 md:block" :class="[activeSection === 'trend' ? 'block' : 'hidden']">
+        <section class="min-w-0 rounded-md border bg-card p-4 md:col-span-2 md:block" :class="[activeSection === 'trend' ? 'block' : 'hidden']">
           <div class="mb-3 flex flex-wrap items-start justify-between gap-3">
             <div>
               <h2 class="font-semibold">
@@ -879,7 +879,7 @@ onMounted(() => loadData())
           </div>
         </section>
 
-        <section class="rounded-md border bg-card p-4 md:col-span-2 md:block" :class="[activeSection === 'details' ? 'block' : 'hidden']">
+        <section class="min-w-0 rounded-md border bg-card p-4 md:col-span-2 md:block" :class="[activeSection === 'details' ? 'block' : 'hidden']">
           <div class="mb-3">
             <h2 class="font-semibold">
               指标明细

@@ -134,6 +134,9 @@
   .quality-chart {
     height: 360px;
     min-height: 360px;
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
     width: 100%;
   }
 
