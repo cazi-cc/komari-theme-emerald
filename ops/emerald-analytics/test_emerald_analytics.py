@@ -60,9 +60,9 @@ class ScoringModelTests(unittest.TestCase):
         self.assertEqual(config["model_version"], 2)
         self.assertEqual(
             config["weights"],
-            {"loss": 40.0, "p50": 30.0, "p95": 25.0, "volatility": 3.0, "coverage": 2.0},
+            {"loss": 55.0, "p50": 20.0, "p95": 10.0, "volatility": 10.0, "coverage": 5.0},
         )
-        self.assertEqual(config["grade_thresholds"], {"excellent": 95.0, "good": 85.0, "fair": 70.0})
+        self.assertEqual(config["grade_thresholds"], {"excellent": 90.0, "good": 80.0, "fair": 60.0})
 
     def test_current_model_keeps_custom_weights(self):
         config = analytics.scoring_config(
@@ -86,7 +86,7 @@ class ScoringModelTests(unittest.TestCase):
         self.assertGreater(analytics.volatility_score(0.061), 90)
         self.assertLess(analytics.volatility_score(0.50), analytics.volatility_score(0.20))
 
-    def test_legend_example_is_good_not_excellent(self):
+    def test_current_baseline_applies_configured_thresholds(self):
         components = {
             "loss": 100.0,
             "p50": 83.7874,
@@ -97,11 +97,10 @@ class ScoringModelTests(unittest.TestCase):
         weights = analytics.scoring_config({})["weights"]
         score = sum(components[key] * weights[key] for key in components) / 100
 
-        self.assertGreaterEqual(score, 85)
-        self.assertLess(score, 95)
+        self.assertGreaterEqual(score, 90)
         self.assertEqual(
-            analytics.grade_for(score, {"excellent": 95.0, "good": 85.0, "fair": 70.0}),
-            "良好",
+            analytics.grade_for(score, {"excellent": 90.0, "good": 80.0, "fair": 60.0}),
+            "优秀",
         )
 
     def test_public_window_omits_private_task_target(self):

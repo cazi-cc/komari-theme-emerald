@@ -25,16 +25,16 @@ WINDOW_GROUPS = {
     "all": [1, 6, 12, 24, 72, 168],
 }
 DEFAULTS = {
-    "networkScoreLossWeight": 40.0,
-    "networkScoreP50Weight": 30.0,
-    "networkScoreP95Weight": 25.0,
-    "networkScoreVolatilityWeight": 3.0,
-    "networkScoreCoverageWeight": 2.0,
+    "networkScoreLossWeight": 55.0,
+    "networkScoreP50Weight": 20.0,
+    "networkScoreP95Weight": 10.0,
+    "networkScoreVolatilityWeight": 10.0,
+    "networkScoreCoverageWeight": 5.0,
     "networkScoreMinSamples": 30,
     "networkScoreMinCoverage": 20.0,
-    "networkScoreExcellentThreshold": 95.0,
-    "networkScoreGoodThreshold": 85.0,
-    "networkScoreFairThreshold": 70.0,
+    "networkScoreExcellentThreshold": 90.0,
+    "networkScoreGoodThreshold": 80.0,
+    "networkScoreFairThreshold": 60.0,
 }
 
 
@@ -143,7 +143,13 @@ def scoring_config(settings: dict[str, Any]) -> dict[str, Any]:
     }
     total = sum(raw_weights.values())
     if total <= 0:
-        raw_weights = {"loss": 40.0, "p50": 30.0, "p95": 25.0, "volatility": 3.0, "coverage": 2.0}
+        raw_weights = {
+            "loss": DEFAULTS["networkScoreLossWeight"],
+            "p50": DEFAULTS["networkScoreP50Weight"],
+            "p95": DEFAULTS["networkScoreP95Weight"],
+            "volatility": DEFAULTS["networkScoreVolatilityWeight"],
+            "coverage": DEFAULTS["networkScoreCoverageWeight"],
+        }
         total = 100.0
     weights = {key: round(value * 100 / total, 4) for key, value in raw_weights.items()}
     fair_threshold = clamp(
