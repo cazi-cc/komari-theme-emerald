@@ -31,6 +31,8 @@ export interface TCPQualityModeStats {
   runs: number
   coverage_percent: number
   score: number | null
+  score_components?: Record<string, number>
+  score_inputs?: Record<string, number>
   rankable: boolean
   reason?: string
 }
@@ -67,10 +69,15 @@ export interface TCPQualitySnapshotNode {
   large_experimental_score: number | null
   tcp_score: number | null
   overall_score: number | null
+  tcp_score_before_guard: number | null
+  overall_score_before_guard: number | null
+  loss_guard_cap: number | null
+  diagnostics: string[]
   standard: TCPQualityModeStats
   large?: TCPQualityModeStats
   targets: TCPQualityNodeTarget[]
   trend: TCPQualityTrendPoint[]
+  large_trend?: TCPQualityTrendPoint[]
 }
 
 export interface TCPQualitySnapshot {

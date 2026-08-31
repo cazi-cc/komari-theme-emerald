@@ -138,13 +138,13 @@ const tcpOverallWeightItems: Array<{ key: TCPWeightKey, label: string }> = [
   { key: 'tcpOverallLargeWeight', label: '实验性大小包' },
 ]
 const tcpStandardWeightItems: Array<{ key: TCPWeightKey, label: string }> = [
-  { key: 'tcpStandardLossWeight', label: 'SYN 首包丢失' },
+  { key: 'tcpStandardLossWeight', label: 'SYN 首次响应丢失' },
   { key: 'tcpStandardP50Weight', label: 'P50 延迟' },
   { key: 'tcpStandardP95Weight', label: 'P95 延迟' },
   { key: 'tcpStandardCoverageWeight', label: '样本覆盖率' },
 ]
 const tcpLargeWeightItems: Array<{ key: TCPWeightKey, label: string }> = [
-  { key: 'tcpLargeLossWeight', label: '大小包丢失' },
+  { key: 'tcpLargeLossWeight', label: '大小包绝对丢失（诊断）' },
   { key: 'tcpLargeExtraLossWeight', label: '相对标准包额外丢失' },
   { key: 'tcpLargeP95DegradationWeight', label: 'P95 劣化比例' },
   { key: 'tcpLargeCoverageWeight', label: '样本覆盖率' },
@@ -1291,7 +1291,7 @@ onMounted(loadSettings)
                 </select>
               </label>
               <div class="rounded-md bg-muted/60 px-3 py-2 text-xs leading-5 text-muted-foreground">
-                “SYN 首包丢失率”表示首次 TCP 建连请求没有收到响应。TcpQuality 将其称为重传率，但这里不会把它误写成操作系统实际统计到的 TCP 重传次数。
+                “SYN 首次响应丢失率”表示首次 TCP 建连请求没有按时收到响应。TcpQuality 将其称为重传率，但它不是操作系统 TCP 栈确认的真实重传次数。
               </div>
             </div>
 
@@ -1302,7 +1302,7 @@ onMounted(loadSettings)
                     综合评分权重
                   </h3>
                   <p class="mt-1 text-xs text-muted-foreground">
-                    未启用实验性大小包时，服务端只在 ICMP 与标准 SYN 之间重新归一化。
+                    推荐值优先反映真实建连体验：标准 SYN 为主体，实验性大小包只保留少量诊断权重。未启用大小包时自动在 ICMP 与标准 SYN 之间重新归一化。
                   </p>
                 </div>
                 <span class="rounded bg-primary/10 px-2 py-1 text-xs font-semibold text-primary tabular-nums">
@@ -1342,7 +1342,7 @@ onMounted(loadSettings)
                       实验性大小包评分
                     </h3>
                     <p class="mt-1 text-[11px] text-muted-foreground">
-                      仅在任务启用大小包时参与综合分。
+                      仅在任务启用时参与综合分。当前是 SYN 携带实验数据，用于发现中间设备兼容问题，不等同于完整网页传输、标准路径 MTU 测试或真实 TCP 重传。
                     </p>
                   </div>
                   <span class="text-xs text-muted-foreground tabular-nums">合计 {{ tcpLargeWeightTotal }}%</span>
