@@ -13,6 +13,7 @@ import dayjs from 'dayjs'
 import { computed, onMounted, ref, watch } from 'vue'
 import VChart from 'vue-echarts'
 import { useRoute, useRouter } from 'vue-router'
+import ScoreBreakdown from '@/components/ScoreBreakdown.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Empty } from '@/components/ui/empty'
@@ -29,6 +30,7 @@ import {
   loadNetworkTrend,
   loadProbeDiagnostics,
 } from '@/utils/networkComparison'
+import { buildWeightedScoreItems, scoreDeduction } from '@/utils/scoreBreakdown'
 import '@/utils/echarts'
 
 const viewProps = withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false })
@@ -179,6 +181,54 @@ function scoreText(node: NetworkComparisonNode): string {
 
 function nodeLossText(node: NetworkComparisonNode): string {
   return node.samples > 0 ? formatLossRate(node.loss_percent) : '--'
+}
+
+function icmpScoreItems(node: NetworkComparisonNode) {
+  const weights = windowData.value?.scoring.weights
+  const enabled = node.score !== null
+  return buildWeightedScoreItems([
+    {
+      key: 'loss',
+      label: '丢包率',
+      raw: node.samples > 0 ? formatLossRate(node.loss_percent) : undefined,
+      score: node.score_components?.loss,
+      weight: enabled ? weights?.loss : 0,
+    },
+    {
+      key: 'p50',
+      label: 'P50 日常延迟',
+      raw: node.p50 === null ? undefined : `${node.p50.toFixed(1)} ms`,
+      score: node.score_components?.p50,
+      weight: enabled ? weights?.p50 : 0,
+    },
+    {
+      key: 'p95',
+      label: 'P95 较慢延迟',
+      raw: node.p95 === null ? undefined : `${node.p95.toFixed(1)} ms`,
+      score: node.score_components?.p95,
+      weight: enabled ? weights?.p95 : 0,
+    },
+    {
+      key: 'volatility',
+      label: '波动率',
+      raw: node.volatility === null ? undefined : node.volatility.toFixed(3),
+      score: node.score_components?.volatility,
+      weight: enabled ? weights?.volatility : 0,
+      note: 'P95 与 P50 的相对差距，越小越稳定',
+    },
+    {
+      key: 'coverage',
+      label: '样本覆盖率',
+      raw: formatCoverage(node.coverage_percent),
+      score: node.score_components?.coverage,
+      weight: enabled ? weights?.coverage : 0,
+    },
+  ])
+}
+
+function nodeScoreDeduction(node: NetworkComparisonNode): string {
+  const deduction = scoreDeduction(node.score)
+  return deduction === null ? '--' : deduction.toFixed(1)
 }
 
 function nodeOnline(uuid: string): boolean | null {
@@ -814,6 +864,46 @@ onMounted(() => {
           </section>
 
           <section
+            class="min-w-0 flex-col overflow-hidden rounded-md bg-background/70 md:flex"
+            :class="mobileSection === 'details' ? 'flex' : 'hidden'"
+          >
+            <div class="border-b border-border/60 p-3">
+              <h2 class="text-sm font-semibold">
+                逐项评分与扣分
+              </h2>
+              <p class="mt-1 text-[11px] text-muted-foreground">
+                每行按“分项分 × 权重 = 实得分”计算；实得分与该项满分的差，就是它对最终 ICMP 分造成的扣分。
+              </p>
+            </div>
+            <div>
+              <div v-for="node in sortedNodes" :key="`score-ledger-${node.uuid}`" class="border-b border-border/60 px-3 py-3 last:border-b-0">
+                <div class="mb-2 flex flex-wrap items-start justify-between gap-2">
+                  <div class="min-w-0">
+                    <p class="truncate text-sm font-semibold" :title="node.name">
+                      {{ node.name }}
+                    </p>
+                    <p v-if="nodePublicRemark(node.uuid)" class="truncate text-[10px] text-muted-foreground" :title="nodePublicRemark(node.uuid)">
+                      {{ nodePublicRemark(node.uuid) }}
+                    </p>
+                    <p v-if="node.unranked_reason" class="mt-0.5 text-[10px] text-amber-700 dark:text-amber-400">
+                      {{ node.unranked_reason }}
+                    </p>
+                  </div>
+                  <div class="shrink-0 text-right text-xs">
+                    <p class="text-muted-foreground">
+                      ICMP 最终分
+                    </p>
+                    <p class="font-semibold tabular-nums">
+                      {{ scoreText(node) }} <span class="font-normal text-red-600 dark:text-red-400">· 扣 {{ nodeScoreDeduction(node) }}</span>
+                    </p>
+                  </div>
+                </div>
+                <ScoreBreakdown :items="icmpScoreItems(node)" />
+              </div>
+            </div>
+          </section>
+
+          <section
             class="min-w-0 flex-col rounded-md bg-background/70 p-3 md:flex"
             :class="mobileSection === 'details' ? 'flex' : 'hidden'"
           >
@@ -822,7 +912,7 @@ onMounted(() => {
                 指标明细
               </h2>
               <p class="mt-1 text-[11px] text-muted-foreground">
-                丢包次数来自完整聚合计数，不是从图表采样点推算。
+                这里保留完整样本统计；上方“逐项评分与扣分”解释这些数值分别影响了多少分。丢包次数来自完整聚合计数，不是从图表采样点推算。
               </p>
             </div>
             <div class="overflow-x-auto">
@@ -1034,6 +1124,9 @@ onMounted(() => {
           </p>
           <p class="mt-1">
             当前权重：丢包 {{ windowData?.scoring.weights.loss }}%、P50 {{ windowData?.scoring.weights.p50 }}%、P95 {{ windowData?.scoring.weights.p95 }}%、波动 {{ windowData?.scoring.weights.volatility }}%、覆盖率 {{ windowData?.scoring.weights.coverage }}%。
+          </p>
+          <p class="mt-1">
+            上方分数账本使用当前缓存随附的实际权重和分项分计算，不根据页面图表反推；各项“实得”相加应与最终评分一致，只有显示小数的四舍五入可能产生不超过 0.1 分的尾差。
           </p>
         </section>
       </template>

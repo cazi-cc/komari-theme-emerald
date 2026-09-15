@@ -11,12 +11,14 @@ import dayjs from 'dayjs'
 import { computed, onMounted, ref, watch } from 'vue'
 import VChart from 'vue-echarts'
 import { useRouter } from 'vue-router'
+import ScoreBreakdown from '@/components/ScoreBreakdown.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Empty } from '@/components/ui/empty'
 import { Spinner } from '@/components/ui/spinner'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useAppStore } from '@/stores/app'
+import { buildWeightedScoreItems, scoreDeduction } from '@/utils/scoreBreakdown'
 import {
   formatTCPQualityLoss,
   formatTCPQualityScore,
@@ -155,6 +157,142 @@ function scoreWeight(group: string, key: string): number {
     return 0
   const value = (weights as Record<string, unknown>)[key]
   return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+
+function overallScoreItems(node: TCPQualitySnapshotNode) {
+  const group = node.large_experimental_score === null ? 'overall_without_large' : 'overall_with_large'
+  const enabled = node.overall_score_before_guard !== null
+  return buildWeightedScoreItems([
+    { key: 'icmp', label: 'ICMP 基础分', score: node.icmp_score, weight: enabled ? scoreWeight(group, 'icmp') : 0 },
+    { key: 'tcp_standard', label: '标准 SYN', score: node.tcp_standard_score, weight: enabled ? scoreWeight(group, 'tcp_standard') : 0 },
+    { key: 'large_experimental', label: '实验性大小包', score: node.large_experimental_score, weight: enabled ? scoreWeight(group, 'large_experimental') : 0 },
+  ])
+}
+
+function tcpScoreItems(node: TCPQualitySnapshotNode) {
+  const enabled = node.tcp_score_before_guard !== null
+  return buildWeightedScoreItems([
+    { key: 'tcp_standard', label: '标准 SYN', score: node.tcp_standard_score, weight: enabled ? scoreWeight('overall_with_large', 'tcp_standard') : 0 },
+    { key: 'large_experimental', label: '实验性大小包', score: node.large_experimental_score, weight: enabled ? scoreWeight('overall_with_large', 'large_experimental') : 0 },
+  ])
+}
+
+function profileScoreItems(stats?: TCPQualityModeStats) {
+  const enabled = stats?.score !== null && stats?.score !== undefined
+  return buildWeightedScoreItems([
+    {
+      key: 'target_mean',
+      label: '全部目标平均分',
+      score: stats?.score_components?.target_mean,
+      weight: enabled ? scoreWeight('target_profile', 'mean') : 0,
+      raw: stats?.score_inputs ? `${stats.score_inputs.valid_targets ?? 0} / ${stats.score_inputs.available_targets ?? 0} 个目标` : undefined,
+    },
+    {
+      key: 'target_p20',
+      label: '较弱目标 P20',
+      score: stats?.score_components?.target_p20,
+      weight: enabled ? scoreWeight('target_profile', 'p20') : 0,
+      note: '避免平均分掩盖少数明显偏弱的测试目标',
+    },
+  ])
+}
+
+function standardTargetScoreItems(stats?: TCPQualityModeStats) {
+  const enabled = stats?.score !== null && stats?.score !== undefined
+  return buildWeightedScoreItems([
+    {
+      key: 'first_response_loss',
+      label: '首次响应丢失',
+      raw: stats ? formatTCPQualityLoss(stats.loss_percent) : undefined,
+      score: stats?.score_components?.first_response_loss,
+      weight: enabled ? scoreWeight('tcp_standard', 'first_response_loss') : 0,
+    },
+    {
+      key: 'p50',
+      label: 'P50 建连延迟',
+      raw: stats ? `${stats.p50_ms.toFixed(1)} ms` : undefined,
+      score: stats?.score_components?.p50,
+      weight: enabled ? scoreWeight('tcp_standard', 'p50') : 0,
+    },
+    {
+      key: 'p95',
+      label: 'P95 建连延迟',
+      raw: stats ? `${stats.p95_ms.toFixed(1)} ms` : undefined,
+      score: stats?.score_components?.p95,
+      weight: enabled ? scoreWeight('tcp_standard', 'p95') : 0,
+    },
+    {
+      key: 'coverage',
+      label: '样本覆盖率',
+      raw: stats ? `${stats.coverage_percent.toFixed(1)}%` : undefined,
+      score: stats?.score_components?.coverage,
+      weight: enabled ? scoreWeight('tcp_standard', 'coverage') : 0,
+      note: scoreWeight('tcp_standard', 'coverage') === 0 ? '仅决定数据能否参评' : undefined,
+    },
+  ])
+}
+
+function largeTargetScoreItems(standard?: TCPQualityModeStats, large?: TCPQualityModeStats) {
+  const enabled = large?.score !== null && large?.score !== undefined
+  return buildWeightedScoreItems([
+    {
+      key: 'absolute_loss',
+      label: '大小包绝对丢失',
+      raw: large ? formatTCPQualityLoss(large.loss_percent) : undefined,
+      score: large?.score_components?.absolute_loss,
+      weight: enabled ? scoreWeight('large_experimental', 'loss') : 0,
+      note: scoreWeight('large_experimental', 'loss') === 0 ? '保留作诊断，避免和额外丢失重复扣分' : undefined,
+    },
+    {
+      key: 'extra_loss',
+      label: '相对标准额外丢失',
+      raw: large ? `+${(large.score_inputs?.extra_loss_percent ?? statsExtraLoss(standard, large) ?? 0).toFixed(2)} 个百分点` : undefined,
+      score: large?.score_components?.extra_loss,
+      weight: enabled ? scoreWeight('large_experimental', 'extra_loss') : 0,
+    },
+    {
+      key: 'p95_degradation',
+      label: 'P95 劣化倍数',
+      raw: large ? formatRatio(large.score_inputs?.p95_degradation_ratio ?? statsP95Ratio(standard, large)) : undefined,
+      score: large?.score_components?.p95_degradation,
+      weight: enabled ? scoreWeight('large_experimental', 'p95_degradation') : 0,
+    },
+    {
+      key: 'coverage',
+      label: '样本覆盖率',
+      raw: large ? `${large.coverage_percent.toFixed(1)}%` : undefined,
+      score: large?.score_components?.coverage,
+      weight: enabled ? scoreWeight('large_experimental', 'coverage') : 0,
+      note: scoreWeight('large_experimental', 'coverage') === 0 ? '仅决定数据能否参评' : undefined,
+    },
+  ])
+}
+
+function formatStageScore(score: number | null): string {
+  const deduction = scoreDeduction(score)
+  return score === null ? '--' : `${score.toFixed(1)} 分 · 扣 ${deduction?.toFixed(1)} 分`
+}
+
+function primaryPenaltyText(node: TCPQualitySnapshotNode): string {
+  const isOverall = node.overall_score !== null
+  const stageItems = isOverall ? overallScoreItems(node) : tcpScoreItems(node)
+  const largest = stageItems
+    .filter(item => item.counted && item.deductedPoints !== null)
+    .sort((left, right) => (right.deductedPoints ?? 0) - (left.deductedPoints ?? 0))[0]
+  const guardDeduction = node.overall_score_before_guard !== null && node.overall_score !== null
+    ? Math.max(0, node.overall_score_before_guard - node.overall_score)
+    : 0
+
+  if (guardDeduction > (largest?.deductedPoints ?? 0))
+    return `首次响应丢失触发封顶保护：由 ${node.overall_score_before_guard?.toFixed(1)} 降至 ${node.overall_score?.toFixed(1)}，额外扣 ${guardDeduction.toFixed(1)} 分。`
+  if (!largest || (largest.deductedPoints ?? 0) < 0.01)
+    return node.reason || `各计分项在${isOverall ? '综合分' : 'TCP 分'}中均未产生明显扣分。`
+
+  const tcpItem = tcpScoreItems(node).find(item => item.key === largest.key)
+  const tcpImpact = tcpItem?.counted
+    ? `；在 TCP 分中得 ${tcpItem.earnedPoints?.toFixed(2)}/${tcpItem.maxPoints.toFixed(2)}，扣 ${tcpItem.deductedPoints?.toFixed(2)} 分`
+    : ''
+  return `${largest.label}分项 ${largest.score?.toFixed(1)}，${isOverall ? '综合分' : 'TCP 分'}得 ${largest.earnedPoints?.toFixed(2)}/${largest.maxPoints.toFixed(2)}，扣 ${largest.deductedPoints?.toFixed(2)} 分${isOverall ? tcpImpact : ''}。`
 }
 
 async function loadData(force = false): Promise<void> {
@@ -687,7 +825,7 @@ onMounted(() => loadData())
               TCP 原始质量与扣分依据
             </h2>
             <p class="text-xs text-muted-foreground">
-              图表越靠左下角越好；下方逐节点列出服务端固定快照中的原始样本与主要扣分原因。
+              图表越靠左下角越好；下方按“分项分 × 本级权重 = 实得分”逐层核对，每一级满分均为 100 分。
             </p>
           </div>
 
@@ -720,71 +858,113 @@ onMounted(() => loadData())
           <div class="border-t">
             <div
               v-for="node in sortedNodes" :key="`diagnostic:${node.uuid}`"
-              class="grid gap-3 border-b px-4 py-3 last:border-b-0 lg:grid-cols-[minmax(160px,.8fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(220px,1.25fr)] lg:items-center"
+              class="border-b last:border-b-0"
             >
-              <div class="min-w-0">
-                <p class="truncate text-sm font-semibold">
-                  {{ node.name }}
-                </p>
-                <p v-if="node.public_remark" class="truncate text-xs text-muted-foreground">
-                  {{ node.public_remark }}
-                </p>
-                <p class="mt-1 text-xs text-muted-foreground">
-                  综合 {{ formatTCPQualityScore(nodeRankingScore(node)) }} · TCP {{ formatTCPQualityScore(node.tcp_score) }}
-                </p>
-                <p v-if="node.loss_guard_cap != null" class="mt-1 text-xs font-medium text-amber-600 dark:text-amber-400">
-                  丢失保护：原始 {{ formatTCPQualityScore(node.overall_score_before_guard) }}，最高 {{ node.loss_guard_cap.toFixed(1) }}
-                </p>
+              <div class="flex flex-col gap-3 bg-muted/20 px-4 py-3 sm:flex-row sm:items-start sm:justify-between">
+                <div class="min-w-0">
+                  <p class="truncate text-sm font-semibold">
+                    {{ node.name }}
+                  </p>
+                  <p v-if="node.public_remark" class="truncate text-xs text-muted-foreground">
+                    {{ node.public_remark }}
+                  </p>
+                  <p class="mt-1 text-xs font-medium text-amber-700 dark:text-amber-400">
+                    主要扣分：{{ primaryPenaltyText(node) }}
+                  </p>
+                </div>
+                <div class="grid shrink-0 grid-cols-2 gap-x-5 text-right text-xs">
+                  <div>
+                    <p class="text-muted-foreground">
+                      综合网络分
+                    </p>
+                    <p class="text-lg font-semibold tabular-nums">
+                      {{ formatTCPQualityScore(node.overall_score) }}
+                    </p>
+                  </div>
+                  <div>
+                    <p class="text-muted-foreground">
+                      TCP 质量分
+                    </p>
+                    <p class="text-lg font-semibold tabular-nums">
+                      {{ formatTCPQualityScore(node.tcp_score) }}
+                    </p>
+                  </div>
+                </div>
               </div>
 
-              <div class="text-xs leading-5">
-                <p class="font-medium">
-                  标准 SYN · {{ formatTCPQualityScore(node.tcp_standard_score) }} 分
-                </p>
-                <p class="text-muted-foreground">
-                  响应 {{ formatSampleCount(node.standard) }} · 丢失 {{ formatTCPQualityLoss(node.standard.loss_percent) }}
-                </p>
-                <p class="text-muted-foreground">
-                  P50 / P95 {{ node.standard.p50_ms.toFixed(1) }} / {{ node.standard.p95_ms.toFixed(1) }} ms
-                </p>
-                <p v-if="node.standard.score_components" class="text-muted-foreground">
-                  目标均值 / 弱项 P20 {{ node.standard.score_components.target_mean?.toFixed(1) ?? '--' }} / {{ node.standard.score_components.target_p20?.toFixed(1) ?? '--' }}
-                </p>
+              <div class="grid divide-y lg:grid-cols-2 lg:divide-x lg:divide-y-0">
+                <div class="min-w-0 px-4 py-3">
+                  <div class="mb-2 flex items-center justify-between gap-3">
+                    <div>
+                      <p class="text-sm font-semibold">
+                        综合分怎么算
+                      </p>
+                      <p class="text-[10px] text-muted-foreground">
+                        三项在综合分中的直接贡献与扣分
+                      </p>
+                    </div>
+                    <span class="shrink-0 text-xs font-semibold tabular-nums">{{ formatStageScore(node.overall_score) }}</span>
+                  </div>
+                  <ScoreBreakdown :items="overallScoreItems(node)" />
+                  <p v-if="node.loss_guard_cap != null" class="mt-2 text-xs font-medium text-amber-700 dark:text-amber-400">
+                    封顶保护：加权原始分 {{ formatTCPQualityScore(node.overall_score_before_guard) }}，因标准 SYN 首次响应丢失，最终最高 {{ node.loss_guard_cap.toFixed(1) }} 分。
+                  </p>
+                </div>
+                <div class="min-w-0 px-4 py-3">
+                  <div class="mb-2 flex items-center justify-between gap-3">
+                    <div>
+                      <p class="text-sm font-semibold">
+                        TCP 分怎么算
+                      </p>
+                      <p class="text-[10px] text-muted-foreground">
+                        只在标准 SYN 与大小包之间重新归一化
+                      </p>
+                    </div>
+                    <span class="shrink-0 text-xs font-semibold tabular-nums">{{ formatStageScore(node.tcp_score) }}</span>
+                  </div>
+                  <ScoreBreakdown :items="tcpScoreItems(node)" />
+                  <p v-if="node.loss_guard_cap != null" class="mt-2 text-xs font-medium text-amber-700 dark:text-amber-400">
+                    封顶保护前 {{ formatTCPQualityScore(node.tcp_score_before_guard) }} 分，最终最高 {{ node.loss_guard_cap.toFixed(1) }} 分。
+                  </p>
+                </div>
               </div>
 
-              <div v-if="selectedTask.large_enabled" class="text-xs leading-5">
-                <p class="font-medium">
-                  实验大小包 · {{ formatTCPQualityScore(node.large_experimental_score) }} 分
-                </p>
-                <template v-if="node.large">
-                  <p class="text-muted-foreground">
-                    响应 {{ formatSampleCount(node.large) }} · 丢失 {{ formatTCPQualityLoss(node.large.loss_percent) }}
+              <div class="grid border-t bg-muted/10 lg:grid-cols-2 lg:divide-x">
+                <div class="min-w-0 px-4 py-3">
+                  <div class="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+                    <p class="text-sm font-semibold">
+                      标准 SYN 节点子分
+                    </p>
+                    <span class="text-xs tabular-nums">{{ formatStageScore(node.tcp_standard_score) }}</span>
+                  </div>
+                  <ScoreBreakdown :items="profileScoreItems(node.standard)" compact />
+                  <p class="mt-2 text-[10px] text-muted-foreground">
+                    原始汇总：响应 {{ formatSampleCount(node.standard) }} · 丢失 {{ formatTCPQualityLoss(node.standard.loss_percent) }} · P50/P95 {{ node.standard.p50_ms.toFixed(1) }}/{{ node.standard.p95_ms.toFixed(1) }} ms
                   </p>
-                  <p class="text-muted-foreground">
-                    额外丢失 +{{ (largeExtraLoss(node) ?? 0).toFixed(2) }} 个百分点
+                </div>
+                <div v-if="selectedTask.large_enabled" class="min-w-0 border-t px-4 py-3 lg:border-t-0">
+                  <div class="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+                    <p class="text-sm font-semibold">
+                      实验性大小包节点子分
+                    </p>
+                    <span class="text-xs tabular-nums">{{ formatStageScore(node.large_experimental_score) }}</span>
+                  </div>
+                  <ScoreBreakdown :items="profileScoreItems(node.large)" compact />
+                  <p v-if="node.large" class="mt-2 text-[10px] text-muted-foreground">
+                    原始汇总：响应 {{ formatSampleCount(node.large) }} · 丢失 {{ formatTCPQualityLoss(node.large.loss_percent) }} · 额外丢失 +{{ (largeExtraLoss(node) ?? 0).toFixed(2) }} 个百分点 · P95 {{ formatRatio(largeP95Ratio(node)) }}
                   </p>
-                  <p class="text-muted-foreground">
-                    P95 {{ node.large.p95_ms.toFixed(1) }} ms · {{ formatRatio(largeP95Ratio(node)) }}
+                  <p v-else class="mt-2 text-[10px] text-muted-foreground">
+                    暂无有效大小包样本
                   </p>
-                </template>
-                <p v-else class="text-muted-foreground">
-                  暂无有效大小包样本
-                </p>
-              </div>
-              <div v-else class="text-xs text-muted-foreground">
-                此任务未启用实验性大小包
+                </div>
+                <div v-else class="px-4 py-3 text-xs text-muted-foreground">
+                  此任务未启用实验性大小包
+                </div>
               </div>
 
-              <div class="space-y-1 text-xs leading-5">
-                <p class="font-medium">
-                  主要判断
-                </p>
-                <p v-for="reason in node.diagnostics" :key="reason" class="text-muted-foreground">
-                  {{ reason }}
-                </p>
-                <p v-if="!node.diagnostics?.length" class="text-muted-foreground">
-                  {{ node.reason || '等待新模型快照生成诊断' }}
-                </p>
+              <div v-if="node.diagnostics?.length" class="border-t px-4 py-2 text-[10px] leading-5 text-muted-foreground">
+                <span class="font-medium text-foreground">诊断提示：</span>
+                {{ node.diagnostics.join('；') }}
               </div>
             </div>
           </div>
@@ -846,11 +1026,11 @@ onMounted(() => loadData())
               目标明细
             </h2>
             <p class="text-xs text-muted-foreground">
-              “首次响应丢失率”是 TcpQuality 所称的“重传率”，不等于系统 TCP 栈真实重传次数。目标 IP、域名和端口不会显示。
+              每个得分格直接列出各指标的原始值、分项分、权重、实际贡献和扣分。“首次响应丢失率”不等于系统 TCP 栈真实重传次数。目标 IP、域名和端口不会显示。
             </p>
           </div>
           <div class="overflow-x-auto">
-            <table class="w-full min-w-[1180px] text-sm">
+            <table class="w-full min-w-[1680px] text-sm">
               <thead class="border-y bg-muted/50 text-left text-xs text-muted-foreground">
                 <tr>
                   <th rowspan="2" class="px-4 py-2.5">
@@ -880,7 +1060,7 @@ onMounted(() => loadData())
                     响应 / 发送
                   </th>
                   <th class="px-3 py-2">
-                    得分
+                    计分明细
                   </th>
                   <template v-if="selectedTask.large_enabled">
                     <th class="border-l px-3 py-2">
@@ -899,7 +1079,7 @@ onMounted(() => loadData())
                       响应 / 发送
                     </th>
                     <th class="px-3 py-2">
-                      诊断分
+                      计分明细
                     </th>
                   </template>
                 </tr>
@@ -925,8 +1105,11 @@ onMounted(() => loadData())
                     <td class="px-3 py-2.5 tabular-nums">
                       {{ formatSampleCount(target.standard) }}
                     </td>
-                    <td class="px-3 py-2.5 font-medium tabular-nums">
-                      {{ formatTCPQualityScore(target.standard?.score ?? null) }}
+                    <td class="min-w-[270px] px-3 py-2.5 align-top">
+                      <p class="mb-1 font-semibold tabular-nums">
+                        {{ formatStageScore(target.standard?.score ?? null) }}
+                      </p>
+                      <ScoreBreakdown :items="standardTargetScoreItems(target.standard)" compact />
                     </td>
                     <template v-if="selectedTask.large_enabled">
                       <td class="border-l px-3 py-2.5">
@@ -949,8 +1132,11 @@ onMounted(() => loadData())
                       <td class="px-3 py-2.5 tabular-nums">
                         {{ formatSampleCount(target.large) }}
                       </td>
-                      <td class="px-3 py-2.5 font-medium tabular-nums">
-                        {{ formatTCPQualityScore(target.large?.score ?? null) }}
+                      <td class="min-w-[280px] px-3 py-2.5 align-top">
+                        <p class="mb-1 font-semibold tabular-nums">
+                          {{ formatStageScore(target.large?.score ?? null) }}
+                        </p>
+                        <ScoreBreakdown :items="largeTargetScoreItems(target.standard, target.large)" compact />
                       </td>
                     </template>
                   </tr>
