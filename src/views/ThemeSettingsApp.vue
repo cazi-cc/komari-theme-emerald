@@ -135,7 +135,7 @@ const scoreWeightItems: Array<{ key: ScoreWeightKey, label: string, description:
 const tcpOverallWeightItems: Array<{ key: TCPWeightKey, label: string }> = [
   { key: 'tcpOverallICMPWeight', label: 'ICMP 基础质量' },
   { key: 'tcpOverallStandardWeight', label: 'TCP 标准 SYN' },
-  { key: 'tcpOverallLargeWeight', label: '实验性大小包' },
+  { key: 'tcpOverallLargeWeight', label: 'SYN 载荷兼容性（实验）' },
 ]
 const tcpStandardWeightItems: Array<{ key: TCPWeightKey, label: string }> = [
   { key: 'tcpStandardLossWeight', label: 'SYN 首次响应丢失' },
@@ -144,8 +144,8 @@ const tcpStandardWeightItems: Array<{ key: TCPWeightKey, label: string }> = [
   { key: 'tcpStandardCoverageWeight', label: '样本覆盖率' },
 ]
 const tcpLargeWeightItems: Array<{ key: TCPWeightKey, label: string }> = [
-  { key: 'tcpLargeLossWeight', label: '大小包绝对丢失（诊断）' },
-  { key: 'tcpLargeExtraLossWeight', label: '相对标准包额外丢失' },
+  { key: 'tcpLargeLossWeight', label: '载荷 SYN 绝对丢失（诊断）' },
+  { key: 'tcpLargeExtraLossWeight', label: '相对配对基准额外丢失' },
   { key: 'tcpLargeP95DegradationWeight', label: 'P95 劣化比例' },
   { key: 'tcpLargeCoverageWeight', label: '样本覆盖率' },
 ]
@@ -1302,7 +1302,7 @@ onMounted(loadSettings)
                     综合评分权重
                   </h3>
                   <p class="mt-1 text-xs text-muted-foreground">
-                    推荐值优先反映真实建连体验：标准 SYN 为主体，实验性大小包只保留少量诊断权重。未启用大小包时自动在 ICMP 与标准 SYN 之间重新归一化。
+                    推荐值优先反映真实建连体验：标准 SYN 为主体，SYN 载荷兼容性默认权重为 0，只保留诊断。管理员主动设为非零后才会参与综合分。
                   </p>
                 </div>
                 <span class="rounded bg-primary/10 px-2 py-1 text-xs font-semibold text-primary tabular-nums">
@@ -1339,10 +1339,10 @@ onMounted(loadSettings)
                 <div class="mb-3 flex items-center justify-between gap-3">
                   <div>
                     <h3 class="text-sm font-semibold">
-                      实验性大小包评分
+                      SYN 载荷兼容性诊断
                     </h3>
                     <p class="mt-1 text-[11px] text-muted-foreground">
-                      仅在任务启用时参与综合分。当前是 SYN 携带实验数据，用于发现中间设备兼容问题，不等同于完整网页传输、标准路径 MTU 测试或真实 TCP 重传。
+                      无载荷、300 与 1050 字节三档采用同轮配对样本，用于发现中间设备兼容问题。默认不计综合分；它不等同于完整网页传输、路径 MTU 测试或真实 TCP 重传。
                     </p>
                   </div>
                   <span class="text-xs text-muted-foreground tabular-nums">合计 {{ tcpLargeWeightTotal }}%</span>
@@ -1364,7 +1364,7 @@ onMounted(loadSettings)
                 <label class="space-y-1 text-sm"><span>最少完整运行次数</span><input v-model.number="settings.tcpMinimumRuns" type="number" min="1" max="20" class="h-9 w-full rounded-md border border-border bg-background px-3"></label>
                 <label class="space-y-1 text-sm"><span>目标最低覆盖率（%）</span><input v-model.number="settings.tcpMinimumTargetCoverage" type="number" min="1" max="100" class="h-9 w-full rounded-md border border-border bg-background px-3"></label>
                 <label class="space-y-1 text-sm"><span>标准 SYN 最少样本</span><input v-model.number="settings.tcpMinimumStandardSamples" type="number" min="10" max="10000" class="h-9 w-full rounded-md border border-border bg-background px-3"></label>
-                <label class="space-y-1 text-sm"><span>大小包最少样本</span><input v-model.number="settings.tcpMinimumLargeSamples" type="number" min="10" max="10000" class="h-9 w-full rounded-md border border-border bg-background px-3"></label>
+                <label class="space-y-1 text-sm"><span>载荷实验每档最少样本</span><input v-model.number="settings.tcpMinimumLargeSamples" type="number" min="10" max="10000" class="h-9 w-full rounded-md border border-border bg-background px-3"></label>
                 <label class="space-y-1 text-sm sm:col-span-2"><span>同目标故障排除阈值（% 节点）</span><input v-model.number="settings.tcpReferenceFailureThreshold" type="number" min="50" max="100" class="h-9 w-full rounded-md border border-border bg-background px-3"></label>
               </div>
             </div>

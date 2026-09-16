@@ -7,6 +7,7 @@ export interface TCPQualityPublicTask {
   isp_codes: string[]
   ip_versions: string[]
   large_enabled: boolean
+  experimental_interval: number
   icmp_task_id: number
 }
 
@@ -33,13 +34,29 @@ export interface TCPQualityModeStats {
   score: number | null
   score_components?: Record<string, number>
   score_inputs?: Record<string, number>
+  score_breakdown?: TCPQualityScoreImpact[]
   rankable: boolean
   reason?: string
+}
+
+export interface TCPQualityScoreImpact {
+  key: string
+  label: string
+  input: number
+  unit?: string
+  component_score: number
+  weight: number
+  maximum_points: number
+  awarded_points: number
+  deducted_points: number
 }
 
 export interface TCPQualityNodeTarget {
   target_key: string
   standard?: TCPQualityModeStats
+  experimental_standard?: TCPQualityModeStats
+  payload_300?: TCPQualityModeStats
+  payload_1050?: TCPQualityModeStats
   large?: TCPQualityModeStats
 }
 
@@ -73,11 +90,32 @@ export interface TCPQualitySnapshotNode {
   overall_score_before_guard: number | null
   loss_guard_cap: number | null
   diagnostics: string[]
+  tcp_score_breakdown?: TCPQualityScoreImpact[]
+  overall_score_breakdown?: TCPQualityScoreImpact[]
+  guard_deduction?: number
+  experimental_control_loss_percent?: number
+  experimental_environment_limited_runs?: number
   standard: TCPQualityModeStats
+  experimental_standard?: TCPQualityModeStats
+  payload_300?: TCPQualityModeStats
+  payload_1050?: TCPQualityModeStats
   large?: TCPQualityModeStats
   targets: TCPQualityNodeTarget[]
   trend: TCPQualityTrendPoint[]
+  experimental_standard_trend?: TCPQualityTrendPoint[]
+  payload_300_trend?: TCPQualityTrendPoint[]
+  payload_1050_trend?: TCPQualityTrendPoint[]
   large_trend?: TCPQualityTrendPoint[]
+}
+
+export interface TCPQualityReferenceEvent {
+  target_key: string
+  mode: string
+  time: string
+  reported_nodes: number
+  affected_nodes: number
+  resilient_nodes?: string[]
+  reason: string
 }
 
 export interface TCPQualitySnapshot {
@@ -89,6 +127,7 @@ export interface TCPQualitySnapshot {
   observed_catalog_revisions: string[]
   targets: TCPQualityTargetLabel[]
   excluded_target_keys: string[]
+  excluded_reference_events?: TCPQualityReferenceEvent[]
   nodes: TCPQualitySnapshotNode[]
   valid_nodes: number
   best_node_uuid?: string

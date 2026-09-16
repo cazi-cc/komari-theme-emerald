@@ -1,7 +1,9 @@
 <script setup lang="ts">
+import type { WeightedScoreItem } from '@/utils/scoreBreakdown'
 import type {
   TCPQualityModeStats,
   TCPQualityPublicTask,
+  TCPQualityScoreImpact,
   TCPQualitySnapshot,
   TCPQualitySnapshotNode,
 } from '@/utils/tcpQuality'
@@ -31,7 +33,7 @@ const viewProps = withDefaults(defineProps<{ embedded?: boolean }>(), { embedded
 
 type ViewSection = 'ranking' | 'distribution' | 'trend' | 'targets'
 type TrendMetric = 'min' | 'average' | 'p50' | 'p95' | 'max' | 'loss'
-type TrendMode = 'standard' | 'large'
+type TrendMode = 'standard' | 'experimental_standard' | 'payload_300' | 'payload_1050'
 interface RangeRenderParams {
   dataIndex: number
 }
@@ -81,7 +83,7 @@ const chartTextColor = computed(() => isDark.value ? 'rgba(255,255,255,.68)' : '
 const chartSplitColor = computed(() => isDark.value ? 'rgba(255,255,255,.08)' : 'rgba(15,23,42,.08)')
 const generatedText = computed(() => snapshot.value?.generated_at ? dayjs(snapshot.value.generated_at).format('MM-DD HH:mm:ss') : '--')
 const rangedNodes = computed(() => sortedNodes.value.filter(node => node.standard.samples_received > 0))
-const largeImpactNodes = computed(() => sortedNodes.value.filter(node => node.standard.rankable && node.large?.rankable))
+const largeImpactNodes = computed(() => sortedNodes.value.filter(node => node.experimental_standard?.rankable && node.payload_1050?.rankable))
 const rangeAxisMax = computed(() => {
   const maximum = Math.max(1, ...rangedNodes.value.map(node => node.standard.max_ms))
   return Math.ceil(maximum * 1.12 / 10) * 10
@@ -140,11 +142,11 @@ function statsP95Ratio(standard?: TCPQualityModeStats, large?: TCPQualityModeSta
 }
 
 function largeExtraLoss(node: TCPQualitySnapshotNode): number | null {
-  return statsExtraLoss(node.standard, node.large)
+  return statsExtraLoss(node.experimental_standard, node.payload_1050 ?? node.large)
 }
 
 function largeP95Ratio(node: TCPQualitySnapshotNode): number | null {
-  return statsP95Ratio(node.standard, node.large)
+  return statsP95Ratio(node.experimental_standard, node.payload_1050 ?? node.large)
 }
 
 function formatRatio(value: number | null): string {
@@ -160,44 +162,45 @@ function scoreWeight(group: string, key: string): number {
 }
 
 function overallScoreItems(node: TCPQualitySnapshotNode) {
+  if (node.overall_score_breakdown?.length)
+    return backendImpactItems(node.overall_score_breakdown)
   const group = node.large_experimental_score === null ? 'overall_without_large' : 'overall_with_large'
   const enabled = node.overall_score_before_guard !== null
   return buildWeightedScoreItems([
     { key: 'icmp', label: 'ICMP 基础分', score: node.icmp_score, weight: enabled ? scoreWeight(group, 'icmp') : 0 },
     { key: 'tcp_standard', label: '标准 SYN', score: node.tcp_standard_score, weight: enabled ? scoreWeight(group, 'tcp_standard') : 0 },
-    { key: 'large_experimental', label: '实验性大小包', score: node.large_experimental_score, weight: enabled ? scoreWeight(group, 'large_experimental') : 0 },
+    { key: 'large_experimental', label: 'SYN 载荷兼容性（实验）', score: node.large_experimental_score, weight: enabled ? scoreWeight(group, 'large_experimental') : 0 },
   ])
 }
 
 function tcpScoreItems(node: TCPQualitySnapshotNode) {
+  if (node.tcp_score_breakdown?.length)
+    return backendImpactItems(node.tcp_score_breakdown)
   const enabled = node.tcp_score_before_guard !== null
   return buildWeightedScoreItems([
     { key: 'tcp_standard', label: '标准 SYN', score: node.tcp_standard_score, weight: enabled ? scoreWeight('overall_with_large', 'tcp_standard') : 0 },
-    { key: 'large_experimental', label: '实验性大小包', score: node.large_experimental_score, weight: enabled ? scoreWeight('overall_with_large', 'large_experimental') : 0 },
+    { key: 'large_experimental', label: 'SYN 载荷兼容性（实验）', score: node.large_experimental_score, weight: enabled ? scoreWeight('overall_with_large', 'large_experimental') : 0 },
   ])
 }
 
-function profileScoreItems(stats?: TCPQualityModeStats) {
-  const enabled = stats?.score !== null && stats?.score !== undefined
-  return buildWeightedScoreItems([
-    {
-      key: 'target_mean',
-      label: '全部目标平均分',
-      score: stats?.score_components?.target_mean,
-      weight: enabled ? scoreWeight('target_profile', 'mean') : 0,
-      raw: stats?.score_inputs ? `${stats.score_inputs.valid_targets ?? 0} / ${stats.score_inputs.available_targets ?? 0} 个目标` : undefined,
-    },
-    {
-      key: 'target_p20',
-      label: '较弱目标 P20',
-      score: stats?.score_components?.target_p20,
-      weight: enabled ? scoreWeight('target_profile', 'p20') : 0,
-      note: '避免平均分掩盖少数明显偏弱的测试目标',
-    },
-  ])
+function backendImpactItems(impacts: TCPQualityScoreImpact[]): WeightedScoreItem[] {
+  return impacts.map(impact => ({
+    key: impact.key,
+    label: impact.label,
+    raw: `${impact.input.toFixed(impact.unit === 'ms' ? 1 : 2)}${impact.unit ? ` ${impact.unit}` : ''}`,
+    note: impact.weight === 0 ? '诊断项，不计入本级得分' : undefined,
+    score: impact.component_score,
+    configuredWeight: impact.weight,
+    maxPoints: impact.maximum_points,
+    earnedPoints: impact.weight > 0 ? impact.awarded_points : null,
+    deductedPoints: impact.weight > 0 ? impact.deducted_points : null,
+    counted: impact.weight > 0,
+  }))
 }
 
 function standardTargetScoreItems(stats?: TCPQualityModeStats) {
+  if (stats?.score_breakdown?.length)
+    return backendImpactItems(stats.score_breakdown)
   const enabled = stats?.score !== null && stats?.score !== undefined
   return buildWeightedScoreItems([
     {
@@ -233,11 +236,13 @@ function standardTargetScoreItems(stats?: TCPQualityModeStats) {
 }
 
 function largeTargetScoreItems(standard?: TCPQualityModeStats, large?: TCPQualityModeStats) {
+  if (large?.score_breakdown?.length)
+    return backendImpactItems(large.score_breakdown)
   const enabled = large?.score !== null && large?.score !== undefined
   return buildWeightedScoreItems([
     {
       key: 'absolute_loss',
-      label: '大小包绝对丢失',
+      label: '载荷 SYN 绝对丢失',
       raw: large ? formatTCPQualityLoss(large.loss_percent) : undefined,
       score: large?.score_components?.absolute_loss,
       weight: enabled ? scoreWeight('large_experimental', 'loss') : 0,
@@ -245,7 +250,7 @@ function largeTargetScoreItems(standard?: TCPQualityModeStats, large?: TCPQualit
     },
     {
       key: 'extra_loss',
-      label: '相对标准额外丢失',
+      label: '相对配对基准额外丢失',
       raw: large ? `+${(large.score_inputs?.extra_loss_percent ?? statsExtraLoss(standard, large) ?? 0).toFixed(2)} 个百分点` : undefined,
       score: large?.score_components?.extra_loss,
       weight: enabled ? scoreWeight('large_experimental', 'extra_loss') : 0,
@@ -271,6 +276,12 @@ function largeTargetScoreItems(standard?: TCPQualityModeStats, large?: TCPQualit
 function formatStageScore(score: number | null): string {
   const deduction = scoreDeduction(score)
   return score === null ? '--' : `${score.toFixed(1)} 分 · 扣 ${deduction?.toFixed(1)} 分`
+}
+
+function formatDiagnosticScore(score: number | null): string {
+  if (score === null)
+    return '--'
+  return `${score.toFixed(1)} 分${scoreWeight('overall_with_large', 'large_experimental') === 0 ? ' · 不计综合分' : ''}`
 }
 
 function primaryPenaltyText(node: TCPQualitySnapshotNode): string {
@@ -444,7 +455,7 @@ const largeImpactChartOption = computed(() => ({
       if (!data?.value)
         return ''
       const remark = data.remark ? `<br/><span style="opacity:.72">${escapeHtml(data.remark)}</span>` : ''
-      return `<strong>${escapeHtml(data.name ?? '')}</strong>${remark}<br/>额外首次响应丢失 +${data.value[1].toFixed(2)} 个百分点<br/>P95 劣化 ${data.value[0].toFixed(2)} 倍<br/>标准 / 大小包丢失 ${formatTCPQualityLoss(Number(data.standardLoss ?? 0))} / ${formatTCPQualityLoss(Number(data.largeLoss ?? 0))}<br/>标准 / 大小包 P95 ${Number(data.standardP95 ?? 0).toFixed(1)} / ${Number(data.largeP95 ?? 0).toFixed(1)} ms<br/>大小包首次响应 ${Number(data.received ?? 0)} / ${Number(data.sent ?? 0)}<br/>实验诊断分 ${formatTCPQualityScore(data.score ?? null)}`
+      return `<strong>${escapeHtml(data.name ?? '')}</strong>${remark}<br/>1050 字节载荷额外首次响应丢失 +${data.value[1].toFixed(2)} 个百分点<br/>P95 劣化 ${data.value[0].toFixed(2)} 倍<br/>配对基准 / 1050 字节丢失 ${formatTCPQualityLoss(Number(data.standardLoss ?? 0))} / ${formatTCPQualityLoss(Number(data.largeLoss ?? 0))}<br/>配对基准 / 1050 字节 P95 ${Number(data.standardP95 ?? 0).toFixed(1)} / ${Number(data.largeP95 ?? 0).toFixed(1)} ms<br/>1050 字节首次响应 ${Number(data.received ?? 0)} / ${Number(data.sent ?? 0)}<br/>兼容性诊断指数 ${formatTCPQualityScore(data.score ?? null)}`
     },
   },
   grid: { left: 62, right: 22, top: 28, bottom: 48 },
@@ -476,12 +487,12 @@ const largeImpactChartOption = computed(() => ({
     data: largeImpactNodes.value.map((node, index) => ({
       name: node.name,
       remark: node.public_remark ?? '',
-      standardLoss: node.standard.loss_percent,
-      largeLoss: node.large?.loss_percent ?? 0,
-      standardP95: node.standard.p95_ms,
-      largeP95: node.large?.p95_ms ?? 0,
-      sent: node.large?.samples_sent ?? 0,
-      received: node.large?.samples_received ?? 0,
+      standardLoss: node.experimental_standard?.loss_percent ?? 0,
+      largeLoss: node.payload_1050?.loss_percent ?? node.large?.loss_percent ?? 0,
+      standardP95: node.experimental_standard?.p95_ms ?? 0,
+      largeP95: node.payload_1050?.p95_ms ?? node.large?.p95_ms ?? 0,
+      sent: node.payload_1050?.samples_sent ?? node.large?.samples_sent ?? 0,
+      received: node.payload_1050?.samples_received ?? node.large?.samples_received ?? 0,
       score: node.large_experimental_score,
       value: [largeP95Ratio(node) ?? 0, largeExtraLoss(node) ?? 0],
       itemStyle: { color: nodeColor(index) },
@@ -580,7 +591,13 @@ const trendChartOption = computed(() => {
       connectNulls: false,
       lineStyle: { width: 2, color: nodeColor(index) },
       itemStyle: { color: nodeColor(index) },
-      data: (mode === 'large' ? (node.large_trend ?? []) : node.trend).map(point => [
+      data: (mode === 'experimental_standard'
+        ? (node.experimental_standard_trend ?? [])
+        : mode === 'payload_300'
+          ? (node.payload_300_trend ?? [])
+          : mode === 'payload_1050'
+            ? (node.payload_1050_trend ?? node.large_trend ?? [])
+            : node.trend).map(point => [
         point.time,
         metric === 'loss'
           ? point.loss_percent
@@ -601,6 +618,10 @@ const trendChartOption = computed(() => {
 function targetLabel(key: string): string {
   const target = snapshot.value?.targets.find(item => item.key === key)
   return target ? `${target.province} ${target.isp} IPv${target.ip_version}` : key
+}
+
+function nodeLabel(uuid: string): string {
+  return snapshot.value?.nodes.find(node => node.uuid === uuid)?.name ?? uuid
 }
 
 watch(selectedTask, (task) => {
@@ -720,15 +741,37 @@ onMounted(() => loadData())
           </h2>
         </div>
         <div class="grid gap-x-6 gap-y-2 text-xs leading-5 text-muted-foreground sm:grid-cols-2 lg:grid-cols-3">
-          <p><strong class="text-foreground">综合网络分：</strong>ICMP {{ scoreWeight('overall_with_large', 'icmp') }}%、标准 SYN {{ scoreWeight('overall_with_large', 'tcp_standard') }}%、实验性大小包 {{ scoreWeight('overall_with_large', 'large_experimental') }}%；未启用大小包时自动重新归一化。</p>
+          <p><strong class="text-foreground">综合网络分：</strong>ICMP {{ scoreWeight('overall_with_large', 'icmp') }}%、标准 SYN {{ scoreWeight('overall_with_large', 'tcp_standard') }}%、SYN 载荷兼容性 {{ scoreWeight('overall_with_large', 'large_experimental') }}%。实验默认权重为 0，不扣综合分。</p>
           <p><strong class="text-foreground">首次响应丢失：</strong>发出的 TCP SYN 没有按时收到首次响应，越低越稳定；它不是系统统计的真实重传次数。</p>
           <p><strong class="text-foreground">标准 SYN 分：</strong>首次响应丢失 {{ scoreWeight('tcp_standard', 'first_response_loss') }}%、P50 {{ scoreWeight('tcp_standard', 'p50') }}%、P95 {{ scoreWeight('tcp_standard', 'p95') }}%、覆盖率 {{ scoreWeight('tcp_standard', 'coverage') }}%；覆盖率为 0% 时只决定能否参评。</p>
-          <p><strong class="text-foreground">实验性大小包：</strong>绝对丢失 {{ scoreWeight('large_experimental', 'loss') }}%、相对标准 SYN 的额外丢失 {{ scoreWeight('large_experimental', 'extra_loss') }}%、P95 劣化 {{ scoreWeight('large_experimental', 'p95_degradation') }}%，用于发现中间设备兼容问题。</p>
+          <p><strong class="text-foreground">SYN 载荷兼容性：</strong>同一轮交错比较无载荷、300 与 1050 字节 SYN；关注相对配对基准多丢多少、P95 变慢多少，用于发现中间设备区别处理。</p>
           <p><strong class="text-foreground">典型最小–最大：</strong>综合多轮检测的稳健边界，保留大范围波动，同时降低单次极端误差的干扰。</p>
           <p><strong class="text-foreground">P50 / P95：</strong>P50 代表日常水平，P95 更接近偶发卡顿时的体验。</p>
           <p><strong class="text-foreground">覆盖率：</strong>有效样本达到计划样本的比例；数据不足时不会强行参与排名。</p>
           <p><strong class="text-foreground">同时故障剔除：</strong>多个节点同一时段都失败时，优先判断为公共测试目标异常，避免错误处罚节点。</p>
-          <p><strong class="text-foreground">为何大小包只占少量权重：</strong>当前探测是 SYN 携带实验数据，不是完整网页下载，也不是标准的路径 MTU 或操作系统 TCP 重传测试。</p>
+          <p><strong class="text-foreground">为何默认不计分：</strong>载荷 SYN 不是完整网页下载，也不是路径 MTU 或操作系统 TCP 重传测试；公共预检或多节点同步异常会单独标记，不归责于节点。</p>
+        </div>
+      </section>
+
+      <section v-if="snapshot.excluded_reference_events?.length" class="mb-5 rounded-md border border-amber-500/35 bg-amber-500/5 px-4 py-3">
+        <div class="flex items-start gap-2">
+          <Icon icon="lucide:shield-alert" width="17" height="17" class="mt-0.5 shrink-0 text-amber-700 dark:text-amber-400" />
+          <div class="min-w-0">
+            <h2 class="text-sm font-semibold">
+              已排除 {{ snapshot.excluded_reference_events.length }} 次共同探测异常
+            </h2>
+            <p class="mt-1 text-xs leading-5 text-muted-foreground">
+              多数节点在同一目标、同一时段同步异常，系统将其视为目标或探测机制共同事件，不计入节点得分。
+            </p>
+            <div class="mt-2 space-y-1 text-[11px] text-muted-foreground">
+              <p v-for="event in snapshot.excluded_reference_events.slice(-3)" :key="`${event.target_key}:${event.mode}:${event.time}`">
+                {{ dayjs(event.time).format('MM-DD HH:mm') }} · {{ targetLabel(event.target_key) }} · {{ event.affected_nodes }}/{{ event.reported_nodes }} 节点异常
+                <template v-if="event.resilient_nodes?.length">
+                  ；保持正常：{{ event.resilient_nodes.map(nodeLabel).join('、') }}
+                </template>
+              </p>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -844,10 +887,10 @@ onMounted(() => loadData())
 
             <div v-if="selectedTask.large_enabled" class="min-w-0 border-t px-4 pb-4 pt-4 lg:border-t-0 lg:pt-0">
               <h3 class="text-sm font-semibold">
-                实验性大小包影响
+                SYN 载荷兼容性（实验）
               </h3>
               <p class="text-xs text-muted-foreground">
-                只看相对标准 SYN 多丢多少、P95 变慢几倍；用于诊断 SYN 数据包被中间设备区别处理的可能性。
+                以同一轮无载荷 SYN 为配对基准，图中展示 1050 字节载荷多丢多少、P95 变慢几倍；默认不参与综合评分。
               </p>
               <div class="quality-chart quality-chart--diagnostic">
                 <VChart v-if="isDesktop || activeSection === 'distribution'" class="size-full" :option="largeImpactChartOption" autoresize />
@@ -917,7 +960,7 @@ onMounted(() => loadData())
                         TCP 分怎么算
                       </p>
                       <p class="text-[10px] text-muted-foreground">
-                        只在标准 SYN 与大小包之间重新归一化
+                        标准 SYN 为主体；载荷兼容性仅在管理员设置非零权重时参与
                       </p>
                     </div>
                     <span class="shrink-0 text-xs font-semibold tabular-nums">{{ formatStageScore(node.tcp_score) }}</span>
@@ -937,7 +980,7 @@ onMounted(() => loadData())
                     </p>
                     <span class="text-xs tabular-nums">{{ formatStageScore(node.tcp_standard_score) }}</span>
                   </div>
-                  <ScoreBreakdown :items="profileScoreItems(node.standard)" compact />
+                  <ScoreBreakdown :items="standardTargetScoreItems(node.standard)" compact />
                   <p class="mt-2 text-[10px] text-muted-foreground">
                     原始汇总：响应 {{ formatSampleCount(node.standard) }} · 丢失 {{ formatTCPQualityLoss(node.standard.loss_percent) }} · P50/P95 {{ node.standard.p50_ms.toFixed(1) }}/{{ node.standard.p95_ms.toFixed(1) }} ms
                   </p>
@@ -945,20 +988,36 @@ onMounted(() => loadData())
                 <div v-if="selectedTask.large_enabled" class="min-w-0 border-t px-4 py-3 lg:border-t-0">
                   <div class="mb-2 flex flex-wrap items-baseline justify-between gap-2">
                     <p class="text-sm font-semibold">
-                      实验性大小包节点子分
+                      SYN 载荷兼容性诊断指数
                     </p>
-                    <span class="text-xs tabular-nums">{{ formatStageScore(node.large_experimental_score) }}</span>
+                    <span class="text-xs tabular-nums">{{ formatDiagnosticScore(node.large_experimental_score) }}</span>
                   </div>
-                  <ScoreBreakdown :items="profileScoreItems(node.large)" compact />
-                  <p v-if="node.large" class="mt-2 text-[10px] text-muted-foreground">
-                    原始汇总：响应 {{ formatSampleCount(node.large) }} · 丢失 {{ formatTCPQualityLoss(node.large.loss_percent) }} · 额外丢失 +{{ (largeExtraLoss(node) ?? 0).toFixed(2) }} 个百分点 · P95 {{ formatRatio(largeP95Ratio(node)) }}
+                  <p v-if="node.experimental_standard" class="mb-3 text-[10px] text-muted-foreground">
+                    同轮配对基准：响应 {{ formatSampleCount(node.experimental_standard) }} · 丢失 {{ formatTCPQualityLoss(node.experimental_standard.loss_percent) }} · P50/P95 {{ node.experimental_standard.p50_ms.toFixed(1) }}/{{ node.experimental_standard.p95_ms.toFixed(1) }} ms
                   </p>
-                  <p v-else class="mt-2 text-[10px] text-muted-foreground">
-                    暂无有效大小包样本
-                  </p>
+                  <div class="grid gap-3 xl:grid-cols-2">
+                    <div class="min-w-0 rounded-md border bg-background/60 p-2">
+                      <p class="mb-1 text-xs font-semibold">
+                        300 字节载荷
+                      </p>
+                      <ScoreBreakdown :items="largeTargetScoreItems(node.experimental_standard, node.payload_300)" compact />
+                      <p class="mt-2 text-[10px] text-muted-foreground">
+                        响应 {{ formatSampleCount(node.payload_300) }} · 丢失 {{ node.payload_300 ? formatTCPQualityLoss(node.payload_300.loss_percent) : '--' }}
+                      </p>
+                    </div>
+                    <div class="min-w-0 rounded-md border bg-background/60 p-2">
+                      <p class="mb-1 text-xs font-semibold">
+                        1050 字节载荷
+                      </p>
+                      <ScoreBreakdown :items="largeTargetScoreItems(node.experimental_standard, node.payload_1050 ?? node.large)" compact />
+                      <p class="mt-2 text-[10px] text-muted-foreground">
+                        响应 {{ formatSampleCount(node.payload_1050 ?? node.large) }} · 丢失 {{ node.payload_1050 || node.large ? formatTCPQualityLoss(node.payload_1050?.loss_percent ?? node.large?.loss_percent ?? 0) : '--' }}
+                      </p>
+                    </div>
+                  </div>
                 </div>
                 <div v-else class="px-4 py-3 text-xs text-muted-foreground">
-                  此任务未启用实验性大小包
+                  此任务未启用 SYN 载荷兼容性实验
                 </div>
               </div>
 
@@ -986,8 +1045,14 @@ onMounted(() => loadData())
                   <TabsTrigger value="standard">
                     标准 SYN
                   </TabsTrigger>
-                  <TabsTrigger value="large">
-                    实验大小包
+                  <TabsTrigger value="experimental_standard">
+                    实验基准
+                  </TabsTrigger>
+                  <TabsTrigger value="payload_300">
+                    300B 载荷
+                  </TabsTrigger>
+                  <TabsTrigger value="payload_1050">
+                    1050B 载荷
                   </TabsTrigger>
                 </TabsList>
               </Tabs>
@@ -1029,120 +1094,74 @@ onMounted(() => loadData())
               每个得分格直接列出各指标的原始值、分项分、权重、实际贡献和扣分。“首次响应丢失率”不等于系统 TCP 栈真实重传次数。目标 IP、域名和端口不会显示。
             </p>
           </div>
-          <div class="overflow-x-auto">
-            <table class="w-full min-w-[1680px] text-sm">
-              <thead class="border-y bg-muted/50 text-left text-xs text-muted-foreground">
-                <tr>
-                  <th rowspan="2" class="px-4 py-2.5">
-                    节点
-                  </th>
-                  <th rowspan="2" class="px-4 py-2.5">
-                    测试目标
-                  </th>
-                  <th colspan="5" class="border-l px-4 py-2 text-center text-foreground">
-                    TCP 标准 SYN
-                  </th>
-                  <th v-if="selectedTask.large_enabled" colspan="6" class="border-l px-4 py-2 text-center text-foreground">
-                    实验性大小包
-                  </th>
-                </tr>
-                <tr class="border-t">
-                  <th class="border-l px-3 py-2">
-                    P50
-                  </th>
-                  <th class="px-3 py-2">
-                    P95
-                  </th>
-                  <th class="px-3 py-2">
-                    首次响应丢失
-                  </th>
-                  <th class="px-3 py-2">
-                    响应 / 发送
-                  </th>
-                  <th class="px-3 py-2">
-                    计分明细
-                  </th>
-                  <template v-if="selectedTask.large_enabled">
-                    <th class="border-l px-3 py-2">
-                      P50
-                    </th>
-                    <th class="px-3 py-2">
-                      P95
-                    </th>
-                    <th class="px-3 py-2">
-                      首次响应丢失
-                    </th>
-                    <th class="px-3 py-2">
-                      相对标准 SYN
-                    </th>
-                    <th class="px-3 py-2">
-                      响应 / 发送
-                    </th>
-                    <th class="px-3 py-2">
-                      计分明细
-                    </th>
-                  </template>
-                </tr>
-              </thead>
-              <tbody>
-                <template v-for="node in sortedNodes" :key="node.uuid">
-                  <tr v-for="(target, index) in node.targets" :key="`${node.uuid}:${target.target_key}`" class="border-b last:border-b-0">
-                    <td class="px-4 py-2.5 font-medium">
-                      {{ index === 0 ? node.name : '' }}
-                    </td>
-                    <td class="px-4 py-2.5">
-                      {{ targetLabel(target.target_key) }}
-                    </td>
-                    <td class="border-l px-3 py-2.5">
-                      {{ target.standard ? `${target.standard.p50_ms.toFixed(1)} ms` : '--' }}
-                    </td>
-                    <td class="px-3 py-2.5">
-                      {{ target.standard ? `${target.standard.p95_ms.toFixed(1)} ms` : '--' }}
-                    </td>
-                    <td class="px-3 py-2.5">
-                      {{ target.standard ? formatTCPQualityLoss(target.standard.loss_percent) : '--' }}
-                    </td>
-                    <td class="px-3 py-2.5 tabular-nums">
-                      {{ formatSampleCount(target.standard) }}
-                    </td>
-                    <td class="min-w-[270px] px-3 py-2.5 align-top">
-                      <p class="mb-1 font-semibold tabular-nums">
-                        {{ formatStageScore(target.standard?.score ?? null) }}
-                      </p>
-                      <ScoreBreakdown :items="standardTargetScoreItems(target.standard)" compact />
-                    </td>
-                    <template v-if="selectedTask.large_enabled">
-                      <td class="border-l px-3 py-2.5">
-                        {{ target.large ? `${target.large.p50_ms.toFixed(1)} ms` : '--' }}
-                      </td>
-                      <td class="px-3 py-2.5">
-                        {{ target.large ? `${target.large.p95_ms.toFixed(1)} ms` : '--' }}
-                      </td>
-                      <td class="px-3 py-2.5">
-                        {{ target.large ? formatTCPQualityLoss(target.large.loss_percent) : '--' }}
-                      </td>
-                      <td class="whitespace-nowrap px-3 py-2.5 text-xs text-muted-foreground">
-                        <template v-if="statsExtraLoss(target.standard, target.large) !== null">
-                          +{{ statsExtraLoss(target.standard, target.large)?.toFixed(2) }}pp · {{ formatRatio(statsP95Ratio(target.standard, target.large)) }}
-                        </template>
-                        <template v-else>
-                          --
-                        </template>
-                      </td>
-                      <td class="px-3 py-2.5 tabular-nums">
-                        {{ formatSampleCount(target.large) }}
-                      </td>
-                      <td class="min-w-[280px] px-3 py-2.5 align-top">
-                        <p class="mb-1 font-semibold tabular-nums">
-                          {{ formatStageScore(target.large?.score ?? null) }}
+          <div class="border-t">
+            <template v-for="node in sortedNodes" :key="node.uuid">
+              <article v-for="target in node.targets" :key="`${node.uuid}:${target.target_key}`" class="border-b last:border-b-0">
+                <header class="flex flex-col gap-1 bg-muted/25 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div class="min-w-0">
+                    <p class="truncate text-sm font-semibold">
+                      {{ node.name }}
+                    </p>
+                    <p v-if="node.public_remark" class="truncate text-xs text-muted-foreground">
+                      {{ node.public_remark }}
+                    </p>
+                  </div>
+                  <Badge variant="secondary">
+                    {{ targetLabel(target.target_key) }}
+                  </Badge>
+                </header>
+                <div class="grid divide-y lg:grid-cols-3 lg:divide-x lg:divide-y-0">
+                  <div class="min-w-0 px-4 py-3">
+                    <div class="mb-2 flex items-start justify-between gap-2">
+                      <div>
+                        <p class="text-sm font-semibold">
+                          标准 SYN
+                        </p><p class="text-[10px] text-muted-foreground">
+                          用于综合评分
                         </p>
-                        <ScoreBreakdown :items="largeTargetScoreItems(target.standard, target.large)" compact />
-                      </td>
-                    </template>
-                  </tr>
-                </template>
-              </tbody>
-            </table>
+                      </div>
+                      <span class="text-xs font-semibold tabular-nums">{{ formatStageScore(target.standard?.score ?? null) }}</span>
+                    </div>
+                    <p class="mb-2 text-[10px] text-muted-foreground">
+                      响应 {{ formatSampleCount(target.standard) }} · 丢失 {{ target.standard ? formatTCPQualityLoss(target.standard.loss_percent) : '--' }} · P50/P95 {{ target.standard ? `${target.standard.p50_ms.toFixed(1)}/${target.standard.p95_ms.toFixed(1)} ms` : '--' }}
+                    </p>
+                    <ScoreBreakdown :items="standardTargetScoreItems(target.standard)" compact />
+                  </div>
+                  <div v-if="selectedTask.large_enabled" class="min-w-0 px-4 py-3">
+                    <div class="mb-2 flex items-start justify-between gap-2">
+                      <div>
+                        <p class="text-sm font-semibold">
+                          300 字节载荷 SYN
+                        </p><p class="text-[10px] text-muted-foreground">
+                          相对同轮无载荷基准
+                        </p>
+                      </div>
+                      <span class="text-xs font-semibold tabular-nums">{{ formatDiagnosticScore(target.payload_300?.score ?? null) }}</span>
+                    </div>
+                    <p class="mb-2 text-[10px] text-muted-foreground">
+                      响应 {{ formatSampleCount(target.payload_300) }} · 丢失 {{ target.payload_300 ? formatTCPQualityLoss(target.payload_300.loss_percent) : '--' }} · 额外 {{ statsExtraLoss(target.experimental_standard, target.payload_300)?.toFixed(2) ?? '--' }} 个百分点
+                    </p>
+                    <ScoreBreakdown :items="largeTargetScoreItems(target.experimental_standard, target.payload_300)" compact />
+                  </div>
+                  <div v-if="selectedTask.large_enabled" class="min-w-0 px-4 py-3">
+                    <div class="mb-2 flex items-start justify-between gap-2">
+                      <div>
+                        <p class="text-sm font-semibold">
+                          1050 字节载荷 SYN
+                        </p><p class="text-[10px] text-muted-foreground">
+                          相对同轮无载荷基准
+                        </p>
+                      </div>
+                      <span class="text-xs font-semibold tabular-nums">{{ formatDiagnosticScore((target.payload_1050 ?? target.large)?.score ?? null) }}</span>
+                    </div>
+                    <p class="mb-2 text-[10px] text-muted-foreground">
+                      响应 {{ formatSampleCount(target.payload_1050 ?? target.large) }} · 丢失 {{ target.payload_1050 || target.large ? formatTCPQualityLoss(target.payload_1050?.loss_percent ?? target.large?.loss_percent ?? 0) : '--' }} · 额外 {{ statsExtraLoss(target.experimental_standard ?? target.standard, target.payload_1050 ?? target.large)?.toFixed(2) ?? '--' }} 个百分点
+                    </p>
+                    <ScoreBreakdown :items="largeTargetScoreItems(target.experimental_standard ?? target.standard, target.payload_1050 ?? target.large)" compact />
+                  </div>
+                </div>
+              </article>
+            </template>
           </div>
         </section>
       </div>
