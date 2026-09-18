@@ -1,7 +1,7 @@
 export const THEME_SHORT = 'Emerald-Cazi'
 export const MAX_HOME_PING_TASKS = 8
 export const NETWORK_SCORE_MODEL_VERSION = 2
-export const TCP_QUALITY_SCORE_MODEL_VERSION = 6
+export const TCP_QUALITY_SCORE_MODEL_VERSION = 7
 
 export type PingChartLayout = 'combined' | 'split'
 export type HomeAnalysisEntry = 'network-quality' | 'unlock-quality'
@@ -183,7 +183,7 @@ export const DEFAULT_THEME_SETTINGS: ThemeSettings = {
   tcpQualityScoreModelVersion: TCP_QUALITY_SCORE_MODEL_VERSION,
   tcpOverallICMPWeight: 25,
   tcpOverallStandardWeight: 65,
-  tcpOverallLargeWeight: 0,
+  tcpOverallLargeWeight: 10,
   tcpStandardLossWeight: 60,
   tcpStandardP50Weight: 15,
   tcpStandardP95Weight: 25,

@@ -278,10 +278,10 @@ function formatStageScore(score: number | null): string {
   return score === null ? '--' : `${score.toFixed(1)} 分 · 扣 ${deduction?.toFixed(1)} 分`
 }
 
-function formatDiagnosticScore(score: number | null): string {
+function formatExperimentalScore(score: number | null, counted = false): string {
   if (score === null)
-    return '--'
-  return `${score.toFixed(1)} 分${scoreWeight('overall_with_large', 'large_experimental') === 0 ? ' · 不计综合分' : ''}`
+    return '未计入'
+  return `${score.toFixed(1)} 分 · ${counted ? '计入综合分' : '实验子分'}`
 }
 
 function primaryPenaltyText(node: TCPQualitySnapshotNode): string {
@@ -741,7 +741,7 @@ onMounted(() => loadData())
           </h2>
         </div>
         <div class="grid gap-x-6 gap-y-2 text-xs leading-5 text-muted-foreground sm:grid-cols-2 lg:grid-cols-3">
-          <p><strong class="text-foreground">综合网络分：</strong>ICMP {{ scoreWeight('overall_with_large', 'icmp') }}%、标准 SYN {{ scoreWeight('overall_with_large', 'tcp_standard') }}%、SYN 载荷兼容性 {{ scoreWeight('overall_with_large', 'large_experimental') }}%。实验默认权重为 0，不扣综合分。</p>
+          <p><strong class="text-foreground">综合网络分：</strong>ICMP {{ scoreWeight('overall_with_large', 'icmp') }}%、标准 SYN {{ scoreWeight('overall_with_large', 'tcp_standard') }}%、SYN 载荷兼容性 {{ scoreWeight('overall_with_large', 'large_experimental') }}%。载荷实验最多影响综合分 10 个百分点。</p>
           <p><strong class="text-foreground">首次响应丢失：</strong>发出的 TCP SYN 没有按时收到首次响应，越低越稳定；它不是系统统计的真实重传次数。</p>
           <p><strong class="text-foreground">标准 SYN 分：</strong>首次响应丢失 {{ scoreWeight('tcp_standard', 'first_response_loss') }}%、P50 {{ scoreWeight('tcp_standard', 'p50') }}%、P95 {{ scoreWeight('tcp_standard', 'p95') }}%、覆盖率 {{ scoreWeight('tcp_standard', 'coverage') }}%；覆盖率为 0% 时只决定能否参评。</p>
           <p><strong class="text-foreground">SYN 载荷兼容性：</strong>同一轮交错比较无载荷、300 与 1050 字节 SYN；关注相对配对基准多丢多少、P95 变慢多少，用于发现中间设备区别处理。</p>
@@ -890,7 +890,7 @@ onMounted(() => loadData())
                 SYN 载荷兼容性（实验）
               </h3>
               <p class="text-xs text-muted-foreground">
-                以同一轮无载荷 SYN 为配对基准，图中展示 1050 字节载荷多丢多少、P95 变慢几倍；默认不参与综合评分。
+                以同一轮无载荷 SYN 为配对基准，图中展示 1050 字节载荷多丢多少、P95 变慢几倍；完整样本通过校验后参与综合评分，最高影响 10 个百分点。
               </p>
               <div class="quality-chart quality-chart--diagnostic">
                 <VChart v-if="isDesktop || activeSection === 'distribution'" class="size-full" :option="largeImpactChartOption" autoresize />
@@ -960,7 +960,7 @@ onMounted(() => loadData())
                         TCP 分怎么算
                       </p>
                       <p class="text-[10px] text-muted-foreground">
-                        标准 SYN 为主体；载荷兼容性仅在管理员设置非零权重时参与
+                        标准 SYN 为主体；两档载荷实验数据完整时按 10% 纳入，否则只保留诊断数据
                       </p>
                     </div>
                     <span class="shrink-0 text-xs font-semibold tabular-nums">{{ formatStageScore(node.tcp_score) }}</span>
@@ -988,10 +988,13 @@ onMounted(() => loadData())
                 <div v-if="selectedTask.large_enabled" class="min-w-0 border-t px-4 py-3 lg:border-t-0">
                   <div class="mb-2 flex flex-wrap items-baseline justify-between gap-2">
                     <p class="text-sm font-semibold">
-                      SYN 载荷兼容性诊断指数
+                      SYN 载荷兼容性（实验）
                     </p>
-                    <span class="text-xs tabular-nums">{{ formatDiagnosticScore(node.large_experimental_score) }}</span>
+                    <span class="text-xs tabular-nums">{{ formatExperimentalScore(node.large_experimental_score, node.large_experimental_score !== null && scoreWeight('overall_with_large', 'large_experimental') > 0) }}</span>
                   </div>
+                  <p v-if="node.large_experimental_score === null && (node.payload_300 || node.payload_1050)" class="mb-3 text-[10px] text-amber-700 dark:text-amber-400">
+                    300 与 1050 字节两档实验数据未同时达到有效门槛，本次未计入综合分。
+                  </p>
                   <p v-if="node.experimental_standard" class="mb-3 text-[10px] text-muted-foreground">
                     同轮配对基准：响应 {{ formatSampleCount(node.experimental_standard) }} · 丢失 {{ formatTCPQualityLoss(node.experimental_standard.loss_percent) }} · P50/P95 {{ node.experimental_standard.p50_ms.toFixed(1) }}/{{ node.experimental_standard.p95_ms.toFixed(1) }} ms
                   </p>
@@ -1136,7 +1139,7 @@ onMounted(() => loadData())
                           相对同轮无载荷基准
                         </p>
                       </div>
-                      <span class="text-xs font-semibold tabular-nums">{{ formatDiagnosticScore(target.payload_300?.score ?? null) }}</span>
+                      <span class="text-xs font-semibold tabular-nums">{{ formatExperimentalScore(target.payload_300?.score ?? null) }}</span>
                     </div>
                     <p class="mb-2 text-[10px] text-muted-foreground">
                       响应 {{ formatSampleCount(target.payload_300) }} · 丢失 {{ target.payload_300 ? formatTCPQualityLoss(target.payload_300.loss_percent) : '--' }} · 额外 {{ statsExtraLoss(target.experimental_standard, target.payload_300)?.toFixed(2) ?? '--' }} 个百分点
@@ -1152,7 +1155,7 @@ onMounted(() => loadData())
                           相对同轮无载荷基准
                         </p>
                       </div>
-                      <span class="text-xs font-semibold tabular-nums">{{ formatDiagnosticScore((target.payload_1050 ?? target.large)?.score ?? null) }}</span>
+                      <span class="text-xs font-semibold tabular-nums">{{ formatExperimentalScore((target.payload_1050 ?? target.large)?.score ?? null) }}</span>
                     </div>
                     <p class="mb-2 text-[10px] text-muted-foreground">
                       响应 {{ formatSampleCount(target.payload_1050 ?? target.large) }} · 丢失 {{ target.payload_1050 || target.large ? formatTCPQualityLoss(target.payload_1050?.loss_percent ?? target.large?.loss_percent ?? 0) : '--' }} · 额外 {{ statsExtraLoss(target.experimental_standard ?? target.standard, target.payload_1050 ?? target.large)?.toFixed(2) ?? '--' }} 个百分点

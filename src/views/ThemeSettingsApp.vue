@@ -1302,7 +1302,7 @@ onMounted(loadSettings)
                     综合评分权重
                   </h3>
                   <p class="mt-1 text-xs text-muted-foreground">
-                    推荐值优先反映真实建连体验：标准 SYN 为主体，SYN 载荷兼容性默认权重为 0，只保留诊断。管理员主动设为非零后才会参与综合分。
+                    推荐值优先反映真实建连体验：ICMP 25%、标准 SYN 65%、SYN 载荷兼容性 10%。载荷实验最多影响综合分 10 个百分点，且只在样本完整、没有公共目标异常时计入。
                   </p>
                 </div>
                 <span class="rounded bg-primary/10 px-2 py-1 text-xs font-semibold text-primary tabular-nums">
@@ -1339,10 +1339,10 @@ onMounted(loadSettings)
                 <div class="mb-3 flex items-center justify-between gap-3">
                   <div>
                     <h3 class="text-sm font-semibold">
-                      SYN 载荷兼容性诊断
+                      SYN 载荷兼容性评分
                     </h3>
                     <p class="mt-1 text-[11px] text-muted-foreground">
-                      无载荷、300 与 1050 字节三档采用同轮配对样本，用于发现中间设备兼容问题。默认不计综合分；它不等同于完整网页传输、路径 MTU 测试或真实 TCP 重传。
+                      无载荷、300 与 1050 字节三档采用同轮配对样本，用于发现中间设备兼容问题。两档实验数据都达到有效门槛时才占综合分 10%；否则只保留诊断，不把缺失数据当成 0 分。它不等同于完整网页传输、路径 MTU 测试或真实 TCP 重传。
                     </p>
                   </div>
                   <span class="text-xs text-muted-foreground tabular-nums">合计 {{ tcpLargeWeightTotal }}%</span>
