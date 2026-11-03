@@ -97,6 +97,14 @@ class ReviewMergeTests(unittest.TestCase):
         self.assertEqual(result["status"], "current")
         self.assertEqual(self.head(), before)
 
+    def test_uncommitted_work_is_never_validated_as_a_publishable_commit(self):
+        self.upstream()
+        self.ref("origin/main")
+        (self.root / "shared.txt").write_text("uncommitted human edit\n")
+        with self.assertRaisesRegex(RuntimeError, "clean"):
+            sync.prepare(self.root, self.config)
+        self.assertEqual((self.root / "shared.txt").read_text(), "uncommitted human edit\n")
+
 
 if __name__ == "__main__":
     unittest.main()

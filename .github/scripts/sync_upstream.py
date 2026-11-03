@@ -28,6 +28,8 @@ def attempt_merge(root, ref):
 
 def prepare(root, config):
     """Only local refs are changed here. Failed merges leave remote refs intact."""
+    if git(root, "status", "--porcelain").stdout.strip():
+        raise RuntimeError("The checkout must be clean before synchronizing upstream")
     base = "origin/" + config["base_branch"]
     upstream = "upstream/" + config["upstream_branch"]
     branch = config["sync_branch"]
@@ -154,6 +156,9 @@ def main():
             stream.flush()
             completed = subprocess.run(command, cwd=root, stdout=stream, stderr=subprocess.STDOUT)
             if completed.returncode:
+                result["status"] = "validation_failed"
+                result["failed_command"] = command
+                (artifact / "result.json").write_text(json.dumps(result, indent=2) + "\n")
                 with summary.open("a") as report:
                     report.write("## Upstream validation failed\n\nNo branch was published. See validation.log.\n")
                 return completed.returncode
