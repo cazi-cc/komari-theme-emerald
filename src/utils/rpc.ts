@@ -198,6 +198,9 @@ export interface NodeStatus {
   net_out: number
   net_total_up: number
   net_total_down: number
+  /** Independent lifetime totals, not reset at a node's monthly billing date. */
+  net_lifetime_up?: number
+  net_lifetime_down?: number
   process: number
   connections: number
   connections_udp: number

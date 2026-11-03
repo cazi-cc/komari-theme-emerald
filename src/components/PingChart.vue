@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { PublicPingTaskOrderItem } from '@/utils/pingTaskOrder'
 import { Icon } from '@iconify/vue'
 import dayjs from 'dayjs'
 import { computed, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
@@ -11,6 +12,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useBackgroundSurface } from '@/composables/useBackgroundSurface'
 import { useAppStore } from '@/stores/app'
 import { loadPingChartData } from '@/utils/pingChartCache'
+import { sortTasksByPublicOrder } from '@/utils/pingTaskOrder'
 import { cutPeakValues, interpolateNullsLinear } from '@/utils/recordHelper'
 import { getSharedRpc, RpcError } from '@/utils/rpc'
 import '@/utils/echarts' // 共享 ECharts 配置
@@ -60,6 +62,9 @@ const presetViews = [
   { label: '1 天', hours: 24 },
   { label: '3 天', hours: 72 },
   { label: '7 天', hours: 168 },
+  { label: '30 天', hours: 720 },
+  { label: '60 天', hours: 1440 },
+  { label: '90 天', hours: 2160 },
 ]
 
 // 可用视图列表
@@ -240,7 +245,7 @@ function getMetricTaskId(series: MetricSeries, point: MetricPoint): number | nul
 }
 
 async function fetchMetricRecords(uuid: string, hours: number): Promise<PingChartData> {
-  const [metricResult, statsResult] = await Promise.all([
+  const [metricResult, statsResult, publicTasks] = await Promise.all([
     rpc.getClient().call<MetricQueryResponse>('public:queryMetrics', {
       metric_keys: ['ping.latency_ms', 'ping.loss'],
       entity_id: uuid,
@@ -253,6 +258,7 @@ async function fetchMetricRecords(uuid: string, hours: number): Promise<PingChar
       uuid,
       hours,
     }),
+    rpc.getClient().call<PublicPingTaskOrderItem[]>('public:getPublicPingTasks').catch(() => []),
   ])
 
   const records: PingRecord[] = []
@@ -292,7 +298,7 @@ async function fetchMetricRecords(uuid: string, hours: number): Promise<PingChar
     type: task.type,
   })).filter(task => Number.isInteger(task.id))
 
-  return { records, tasks: metricTasks }
+  return { records, tasks: sortTasksByPublicOrder(metricTasks, Array.isArray(publicTasks) ? publicTasks : []) }
 }
 
 async function fetchLegacyRecords(uuid: string, hours: number): Promise<PingChartData> {

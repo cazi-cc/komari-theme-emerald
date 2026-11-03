@@ -56,6 +56,8 @@ export interface NodeData {
   net_out: number
   net_total_up: number
   net_total_down: number
+  net_lifetime_up?: number
+  net_lifetime_down?: number
   process: number
   connections: number
   connections_udp: number
@@ -83,6 +85,8 @@ interface StatusData {
   net_out: number
   net_total_up: number
   net_total_down: number
+  net_lifetime_up?: number
+  net_lifetime_down?: number
   process: number
   connections: number
   connections_udp: number
@@ -208,6 +212,8 @@ const useNodesStore = defineStore('nodes', () => {
       net_out: status.net_out,
       net_total_up: status.net_total_up,
       net_total_down: status.net_total_down,
+      net_lifetime_up: status.net_lifetime_up ?? node.net_lifetime_up,
+      net_lifetime_down: status.net_lifetime_down ?? node.net_lifetime_down,
       process: status.process,
       connections: status.connections,
       connections_udp: status.connections_udp,
@@ -236,6 +242,8 @@ const useNodesStore = defineStore('nodes', () => {
       net_out: status.net_out,
       net_total_up: status.net_total_up,
       net_total_down: status.net_total_down,
+      net_lifetime_up: status.net_lifetime_up,
+      net_lifetime_down: status.net_lifetime_down,
       process: status.process,
       connections: status.connections,
       connections_udp: status.connections_udp,
@@ -365,6 +373,8 @@ const useNodesStore = defineStore('nodes', () => {
           net_out: currentNode.net_out,
           net_total_up: currentNode.net_total_up,
           net_total_down: currentNode.net_total_down,
+          net_lifetime_up: currentNode.net_lifetime_up,
+          net_lifetime_down: currentNode.net_lifetime_down,
           process: currentNode.process,
           connections: currentNode.connections,
           connections_udp: currentNode.connections_udp,
