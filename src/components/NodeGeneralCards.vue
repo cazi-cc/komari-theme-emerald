@@ -57,8 +57,8 @@ const totalSpeed = computed(() => {
 })
 
 const totalTraffic = computed(() => {
-  const up = summaryNodes.value.reduce((sum, node) => sum + (node.net_total_up || 0), 0)
-  const down = summaryNodes.value.reduce((sum, node) => sum + (node.net_total_down || 0), 0)
+  const up = summaryNodes.value.reduce((sum, node) => sum + (node.net_lifetime_up ?? node.net_total_up ?? 0), 0)
+  const down = summaryNodes.value.reduce((sum, node) => sum + (node.net_lifetime_down ?? node.net_total_down ?? 0), 0)
   return { up, down }
 })
 
@@ -370,7 +370,7 @@ onMounted(async () => {
           </div>
           <DataTooltip
             as="span" placement="top"
-            :content="`↑ ${formattedTrafficUp.value} ${formattedTrafficUp.unit}\n↓ ${formattedTrafficDown.value} ${formattedTrafficDown.unit}`"
+            :content="`历史累计（不随账期重置）\n↑ ${formattedTrafficUp.value} ${formattedTrafficUp.unit}\n↓ ${formattedTrafficDown.value} ${formattedTrafficDown.unit}`"
             class="min-w-0" content-class="whitespace-pre px-2 py-1 left-0 -translate-x-0 leading-normal"
           >
             <Transition v-bind="metricSwitchTransitionProps">
