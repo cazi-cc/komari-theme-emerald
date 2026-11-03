@@ -23,6 +23,7 @@ use([
   CustomChart,
   ScatterChart,
   MapChart,
+  ScatterChart,
   GridComponent,
   GeoComponent,
   TooltipComponent,

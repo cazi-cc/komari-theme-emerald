@@ -1,0 +1,42 @@
+{
+  "upstream_repository": "Tokinx/komari-theme-emerald",
+  "upstream_branch": "master",
+  "base_branch": "master",
+  "sync_branch": "sync/upstream-master",
+  "required_paths": [
+    "src/views/UnlockQuality.vue",
+    "src/views/TCPQuality.vue",
+    "src/utils/pingChartCache.ts",
+    "src/views/ThemeSettingsApp.vue"
+  ],
+  "validation_commands": [
+    [
+      "python3",
+      ".github/scripts/test_sync_upstream.py",
+      "-v"
+    ],
+    [
+      "bun",
+      "install",
+      "--frozen-lockfile"
+    ],
+    [
+      "bun",
+      "run",
+      "build"
+    ]
+  ],
+  "protected_paths": [
+    ".github/scripts/sync_upstream.py",
+    ".github/scripts/test_sync_upstream.py",
+    ".github/upstream-sync.json",
+    ".github/workflows/release-on-version-bump.yml",
+    ".github/workflows/sync-upstream.yml",
+    "komari-theme.json",
+    "package.json",
+    "src/utils/pingChartCache.ts",
+    "src/views/TCPQuality.vue",
+    "src/views/ThemeSettingsApp.vue",
+    "src/views/UnlockQuality.vue"
+  ]
+}

@@ -3,7 +3,7 @@ name: Sync Upstream
 on:
   workflow_dispatch:
   schedule:
-    - cron: "53 3 * * 1"
+    - cron: "17 3 * * 1"
 
 permissions:
   contents: write
@@ -13,186 +13,27 @@ concurrency:
   group: sync-upstream-${{ github.repository }}
   cancel-in-progress: false
 
-env:
-  UPSTREAM_REPOSITORY: Tokinx/komari-theme-emerald
-  UPSTREAM_BRANCH: master
-  BASE_BRANCH: master
-  SYNC_BRANCH: sync/upstream-master
-  PR_TITLE: "chore: sync Tokinx/komari-theme-emerald master"
-
 jobs:
   prepare-sync-pr:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          ref: ${{ env.BASE_BRANCH }}
-
+          ref: master
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.3.14
-
-      - name: Merge upstream into a review branch
-        id: sync
-        run: |
-          set -euo pipefail
-          git config user.name "cazi-upstream-sync"
-          git config user.email "actions@users.noreply.github.com"
-          git remote add upstream "https://github.com/${UPSTREAM_REPOSITORY}.git"
-          git fetch --no-tags upstream "${UPSTREAM_BRANCH}"
-          git fetch --no-tags origin "${BASE_BRANCH}"
-
-          if git merge-base --is-ancestor "upstream/${UPSTREAM_BRANCH}" "origin/${BASE_BRANCH}"; then
-            {
-              echo "needed=false"
-              echo "ready=false"
-              echo "conflict=false"
-            } >> "$GITHUB_OUTPUT"
-            echo "The fork already contains the current upstream branch." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-
-          git checkout -B "${SYNC_BRANCH}" "origin/${BASE_BRANCH}"
-          set +e
-          git merge --no-edit "upstream/${UPSTREAM_BRANCH}"
-          merge_status=$?
-          set -e
-
-          if [ "$merge_status" -ne 0 ]; then
-            conflict_files="$(git diff --name-only --diff-filter=U)"
-            git merge --abort
-            {
-              echo "# Upstream sync requires manual resolution"
-              echo
-              echo "- Upstream: \`${UPSTREAM_REPOSITORY}:${UPSTREAM_BRANCH}\`"
-              echo "- Base: \`${GITHUB_REPOSITORY}:${BASE_BRANCH}\`"
-              echo "- Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-              echo
-              echo "## Conflicting files"
-              echo
-              echo '```text'
-              echo "$conflict_files"
-              echo '```'
-              echo
-              echo "## Fork-owned files to preserve"
-              echo
-              echo '```text'
-              echo 'src/views/UnlockQuality.vue'
-              echo 'src/views/TCPQuality.vue'
-              echo 'src/utils/unlockQuality.ts'
-              echo 'src/utils/tcpQuality.ts'
-              echo 'src/components/NodeCard.vue'
-              echo 'src/views/ThemeSettingsApp.vue'
-              echo 'README.md'
-              echo '.github/workflows/sync-upstream.yml'
-              echo '```'
-              echo
-              echo "Do not merge this report-only commit. Resolve the upstream merge on this branch, delete this file, run the repository tests, and then update the pull request."
-            } > .github/UPSTREAM_SYNC_CONFLICTS.md
-            git add .github/UPSTREAM_SYNC_CONFLICTS.md
-            git commit -m "chore: record upstream merge conflicts"
-            git push --force-with-lease origin "${SYNC_BRANCH}"
-            {
-              echo "needed=true"
-              echo "ready=false"
-              echo "conflict=true"
-              echo "conflict_files<<EOF"
-              echo "$conflict_files"
-              echo "EOF"
-            } >> "$GITHUB_OUTPUT"
-            {
-              echo "## Upstream sync requires manual conflict resolution"
-              echo
-              echo '```text'
-              echo "$conflict_files"
-              echo '```'
-            } >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-
-          protected_changes="$(git diff --name-only "origin/${BASE_BRANCH}..HEAD" -- \
-            src/views/UnlockQuality.vue \
-            src/views/TCPQuality.vue \
-            src/utils/unlockQuality.ts \
-            src/utils/tcpQuality.ts \
-            src/components/NodeCard.vue \
-            src/views/ThemeSettingsApp.vue \
-            README.md \
-            .github/workflows/sync-upstream.yml)"
-          bun install --frozen-lockfile
-          bun run build
-          git push --force-with-lease origin "${SYNC_BRANCH}"
-          {
-            echo "needed=true"
-            echo "ready=true"
-            echo "conflict=false"
-            echo "protected_changes<<EOF"
-            echo "$protected_changes"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-
-          if [ -n "$protected_changes" ]; then
-            {
-              echo "## Fork-owned theme files changed"
-              echo
-              echo '```text'
-              echo "$protected_changes"
-              echo '```'
-              echo
-              echo "Review these files manually before merging."
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
-
-      - name: Create or update the review pull request
-        if: steps.sync.outputs.ready == 'true'
+          bun-version: "1.3.14"
+      - name: Merge upstream and validate the review branch
         env:
           GH_TOKEN: ${{ github.token }}
-          PROTECTED_CHANGES: ${{ steps.sync.outputs.protected_changes }}
-        run: |
-          set -euo pipefail
-          body="$(cat <<'EOF'
-          Automated upstream merge. Keep the rolling v1.0.0 release policy and review Cazi settings, privacy and analysis pages before merging.
-
-          Fork-owned files to preserve:
-
-          ```text
-          src/views/UnlockQuality.vue
-          src/views/TCPQuality.vue
-          src/utils/unlockQuality.ts
-          src/utils/tcpQuality.ts
-          src/components/NodeCard.vue
-          src/views/ThemeSettingsApp.vue
-          README.md
-          .github/workflows/sync-upstream.yml
-          ```
-          EOF
-          )"
-          if [ -n "${PROTECTED_CHANGES}" ]; then
-            body="${body}
-
-          Fork-owned files changed by this sync:
-
-          \`\`\`text
-          ${PROTECTED_CHANGES}
-          \`\`\`"
-          fi
-          if gh pr view "${SYNC_BRANCH}" --repo "${GITHUB_REPOSITORY}" --json number >/dev/null 2>&1; then
-            gh pr edit "${SYNC_BRANCH}" --repo "${GITHUB_REPOSITORY}" --title "${PR_TITLE}" --body "$body"
-          else
-            gh pr create --repo "${GITHUB_REPOSITORY}" --base "${BASE_BRANCH}" --head "${SYNC_BRANCH}" --title "${PR_TITLE}" --body "$body"
-          fi
-
-      - name: Create or update the conflict pull request
-        if: steps.sync.outputs.conflict == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          title="chore: resolve Tokinx/komari-theme-emerald upstream conflicts"
-          body="The automated upstream merge found conflicts. This branch currently contains a conflict report only and must not be merged as-is. Resolve the merge on this branch, delete the report, run all tests, and then update this pull request."
-          if gh pr view "${SYNC_BRANCH}" --repo "${GITHUB_REPOSITORY}" --json number >/dev/null 2>&1; then
-            gh pr edit "${SYNC_BRANCH}" --repo "${GITHUB_REPOSITORY}" --title "$title" --body "$body"
-          else
-            gh pr create --repo "${GITHUB_REPOSITORY}" --base "${BASE_BRANCH}" --head "${SYNC_BRANCH}" --title "$title" --body "$body"
-          fi
+        run: python3 .github/scripts/sync_upstream.py
+      - name: Preserve merge diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: upstream-sync-diagnostics
+          path: ${{ runner.temp }}/upstream-sync/
+          if-no-files-found: ignore
+          retention-days: 14
