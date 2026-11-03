@@ -110,6 +110,12 @@ class GitHub:
                 if answer.get("errors"):
                     raise RuntimeError("Could not mark the conflicted PR as draft")
             self.api("PATCH", "/pulls/" + str(prs[0]["number"]), {"title": title, "body": body})
+            if not conflict and prs[0]["draft"]:
+                answer = self.api("POST", "/graphql", {
+                    "query": "mutation($id: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $id}) { pullRequest { id } } }",
+                    "variables": {"id": prs[0]["node_id"]}})
+                if answer.get("errors"):
+                    raise RuntimeError("Could not mark the validated PR as ready for review")
             return prs[0]["html_url"]
         if conflict and not result.get("publish_conflict_branch"):
             return None
@@ -149,6 +155,9 @@ def main():
         return 1
     missing = [path for path in config.get("required_paths", []) if not (root / path).is_file()]
     if missing:
+        result["status"] = "validation_failed"
+        result["missing_required_paths"] = missing
+        (artifact / "result.json").write_text(json.dumps(result, indent=2) + "\n")
         raise RuntimeError("Fork-owned files removed: " + ", ".join(missing))
     with (artifact / "validation.log").open("w") as stream:
         for command in config["validation_commands"]:
