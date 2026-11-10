@@ -11,7 +11,7 @@ import os
 import sqlite3
 import tempfile
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -88,20 +88,25 @@ def open_database(path: str) -> sqlite3.Connection:
 
 
 def load_source_data(connection: sqlite3.Connection) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    client_columns = {row[1] for row in connection.execute("PRAGMA table_info(clients)")}
+    task_columns = {row[1] for row in connection.execute("PRAGMA table_info(ping_tasks)")}
+    created_column = "created_at" if "created_at" in client_columns else "NULL AS created_at"
+    history_column = "interval_history" if "interval_history" in task_columns else "'[]' AS interval_history"
     clients = [
         {
             "uuid": row["uuid"],
             "name": row["name"] or row["uuid"],
             "region": row["region"] or "",
+            "created_at": row["created_at"],
         }
         for row in connection.execute(
-            "SELECT uuid, name, region FROM clients WHERE hidden = 0 ORDER BY weight ASC, name ASC"
+            f"SELECT uuid, name, region, {created_column} FROM clients WHERE hidden = 0 ORDER BY weight ASC, name ASC"
         )
     ]
     client_ids = {client["uuid"] for client in clients}
     tasks = []
     for row in connection.execute(
-        "SELECT id, weight, name, clients, all_clients, type, interval "
+        f"SELECT id, weight, name, clients, all_clients, type, interval, {history_column} "
         "FROM ping_tasks ORDER BY weight ASC, id ASC"
     ):
         assigned = client_ids if bool(row["all_clients"]) else set(read_json_list(row["clients"])) & client_ids
@@ -112,6 +117,7 @@ def load_source_data(connection: sqlite3.Connection) -> tuple[list[dict[str, Any
                 "name": row["name"] or f"任务 {row['id']}",
                 "type": row["type"] or "icmp",
                 "interval": max(1, int(row["interval"] or 60)),
+                "interval_history": json.loads(row["interval_history"] or "[]"),
                 "clients": sorted(assigned),
             }
         )
@@ -338,6 +344,35 @@ def unranked_reason(samples: int, coverage: float, p50: Any, p95: Any, config: d
     return "、".join(reasons)
 
 
+def parse_timestamp(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed.astimezone(timezone.utc)
+    except ValueError:
+        return None
+
+
+def expected_samples_for_window(task: dict[str, Any], client: dict[str, Any], start: datetime, end: datetime) -> int:
+    created = parse_timestamp(client.get("created_at"))
+    if created and created > start:
+        start = created
+    if end <= start:
+        return 1
+    history = [item for item in task.get("interval_history", []) if isinstance(item, dict) and isinstance(item.get("interval"), (int, float)) and item["interval"] > 0]
+    if not history:
+        return max(1, math.floor((end - start).total_seconds() / task["interval"]))
+    periods = sorted([(parse_timestamp(item.get("at")) or datetime.min.replace(tzinfo=timezone.utc), item["interval"]) for item in history])
+    count = 0.0
+    for index, (at, interval) in enumerate(periods):
+        left = max(start, at)
+        right = min(end, periods[index + 1][0]) if index + 1 < len(periods) else end
+        if right > left:
+            count += (right - left).total_seconds() / interval
+    return max(1, math.floor(count + 1e-9))
+
+
 def build_window(
     hours: int,
     clients: list[dict[str, Any]],
@@ -346,17 +381,19 @@ def build_window(
     results: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
     generated = utc_now()
+    source_end = parse_timestamp(results["stats"].get("end")) or generated
+    source_start = parse_timestamp(results["stats"].get("start")) or source_end - timedelta(hours=hours)
     stats_points = ping_metric_stats(results["stats"])
     client_map = {client["uuid"]: client for client in clients}
     task_output = []
 
     for task in tasks:
         nodes = []
-        expected_samples = max(1, round(hours * 3600 / task["interval"]))
         for uuid in task["clients"]:
             client = client_map.get(uuid)
             if not client:
                 continue
+            expected_samples = expected_samples_for_window(task, client, source_start, source_end)
             key = (uuid, task["id"])
             stats_point = stats_points.get(key)
             p005 = finite_number(stats_point.get("p005"), 0) if stats_point else None

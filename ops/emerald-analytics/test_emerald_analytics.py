@@ -6,6 +6,7 @@ import unittest
 from unittest import mock
 from pathlib import Path
 from types import SimpleNamespace
+from datetime import datetime, timezone, timedelta
 
 
 if sys.platform == "win32":
@@ -19,6 +20,24 @@ SPEC.loader.exec_module(analytics)
 
 
 class ScoringModelTests(unittest.TestCase):
+    def test_coverage_follows_interval_changes_and_registration(self):
+        end = datetime(2026, 11, 10, 12, tzinfo=timezone.utc)
+        start = end - timedelta(days=1)
+        task = {"interval": 15, "interval_history": [{"at": "0001-01-01T00:00:00Z", "interval": 60}, {"at": "2026-11-10T00:00:00Z", "interval": 15}]}
+        self.assertEqual(analytics.expected_samples_for_window(task, {}, start, end), 3600)
+        self.assertEqual(analytics.expected_samples_for_window(task, {"created_at": "2026-11-10 11:00:00+00:00"}, start, end), 240)
+        self.assertEqual(analytics.expected_samples_for_window({"interval": 60}, {}, start, end), 1440)
+
+    def test_changed_cadence_keeps_complete_long_window_rankable(self):
+        task = {"id": 22, "name": "Mobile", "type": "icmp", "clients": ["a"], "interval": 15,
+                "interval_history": [{"at": "0001-01-01T00:00:00Z", "interval": 60}, {"at": "2026-11-10T00:00:00Z", "interval": 15}]}
+        results = {"stats": {"start": "2026-11-09T12:00:00Z", "end": "2026-11-10T12:00:00Z", "stats": [{"entity_id": "a", "task_id": "22", "total": 3600, "loss": 0, "p005": 20, "p50": 30, "p95": 40, "p995": 50}]}}
+        value = analytics.build_window(24, [{"uuid": "a", "name": "A", "region": "HK"}], [task], analytics.scoring_config({}), results)
+        node = value["tasks"][0]["nodes"][0]
+        self.assertEqual(node["expected_samples"], 3600)
+        self.assertEqual(node["coverage_percent"], 100)
+        self.assertTrue(node["rankable"])
+
     def test_rpc_batch_requests_one_full_window_aggregate(self):
         response = {"id": "stats", "result": {"stats": []}}
 
